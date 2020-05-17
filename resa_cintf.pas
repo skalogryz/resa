@@ -26,7 +26,8 @@ function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var r
 function ResHndRelease(var res: TResHandle): TResError; cdecl;
 function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl;
 function ResHndSetFixed(res: TResHandle; isFixed: LongBool): TResError; cdecl;
-function ResHndLoadSync(ahnd: TResHandle): TResError;  cdecl;
+function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
+function ResHndGetObj(res: TResHandle; var resource: Pointer; var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
 
 function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
 function ResExists(const arefName: PUnicodeChar): TResError; cdecl;
@@ -36,13 +37,15 @@ const
   RES_NO_ERROR      = 0;
   RES_SUCCESS       = RES_NO_ERROR;
   RES_INV_PARAMS    = -1;
-  RES_INT_ERROR     = -100;
-  RES_NO_RESOURCE   = -2;
-  RES_NO_FILE       = -3;
-  RES_UNK_FILE      = -4;
-  RES_FAIL_LOAD     = -5;
-  RES_NO_SOURCES    = -300;
-  RES_NO_SOURCEROOT = -301;
+  RES_INT_ERROR     = -100;  // internal errors
+  RES_NO_RESOURCE   = -2;    // the requested refName doesn't exist
+  RES_NO_FILE       = -3;    // the resource file doesn't exist, or cannot be found by its refName
+  RES_UNK_FILE      = -4;    // the resource file doesn't have a loader that can load it
+  RES_FAIL_LOAD     = -5;    // the resource file was not loaded, due to some problems with the loader
+  RES_NOT_LOADED    = -6;    // the resource has not been loaded yet
+  RES_INVALID_FMT   = -101;  // the resource was loaded, but the internal format is not recognizable. (internal error)
+  RES_NO_SOURCES    = -300;  // no sources were registered
+  RES_NO_SOURCEROOT = -301;  // the specified directory cannot be found for directory source
 
 const
   EVENT_START_LOAD      = 10;
@@ -304,6 +307,46 @@ begin
   hnd := TResourceHandler(ahnd);
   res := hnd.Owner.manager.LoadResourceSync(hnd);
   Result := LoadErrorToResError[res];
+end;
+
+function ResHndGetObj(res: TResHandle; var resource: Pointer;
+  var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
+var
+  neededFlag : TResourceFlags;
+  hnd : TResourceHandler;
+  obj : TObject;
+  idx : integer;
+  er  : TExternalResource;
+begin
+  resource:=nil;
+  resRefNumber:=0;
+  if not ResHndSanityCheck(res, Result) then Exit;
+
+  hnd := TResourceHandler(res);
+  if wantReloadedObj <> 0 then wantReloadedObj := 1;
+
+  if wantReloadedObj = 0 then neededFlag := [rfLoaded]
+  else neededFlag := [rfReloaded];
+
+  if hnd.Owner.GetFlags * neededFlag = [] then
+    Result:= RES_NOT_LOADED
+  else begin
+    hnd.Owner.Lock;
+    try
+      idx := wantReloadedObj;
+      obj:=hnd.Owner.resObj[idx].obj;
+      if not (obj is TExternalResource) then
+        Result := RES_INVALID_FMT
+      else begin
+        er := TExternalResource(obj);
+        Resource := er.resRef;
+        resRefNumber := er.resRefNum;
+        Result := RES_SUCCESS;
+      end;
+    finally
+      hnd.Owner.Unlock;
+    end;
+  end;
 end;
 
 { TResManHandle }
