@@ -29,15 +29,16 @@ type
     Handlers : TList;
     flock    : TRTLCriticalSection;
     fRefName : string;
+    fManager : TResourceManager;
+    procedure UnloadAll;
   public
     Flags      : TResourceFlags;
-    manager    : TResourceManager;
     loadedWith : TResourceLoader;
     loadObj    : TObject;
     reloadedWith : TResourceLoader;
     reloadObj  : TObject;
 
-    constructor Create(const ARefName: string);
+    constructor Create(const ARefName: string; AManager: TResourceManager);
     destructor Destroy; override;
     function AllocHandle: TResourceHandler;
     procedure ReleaseHandle(var AHnd: TResourceHandler);
@@ -46,7 +47,9 @@ type
     function GetFlags: TResourceFlags;
     procedure AddFlags(fl: TResourceFlags);
     procedure RemoveFlags(fl: TResourceFlags);
+    function SwapLoads(unloadLoaded: Boolean): Boolean;
     property RefName: string read fRefName; // readonly. no need to lock
+    property Manager: TResourceManager read fManager;
   end;
 
   { TResourceHandler }
@@ -83,7 +86,8 @@ type
     noteStartReloading,
     wantFailToLoad,
     warnAbnormalLoad, // function returned true, but no object was provided
-    noteLoadSuccess
+    noteLoadSuccess,
+    noteUnloadedResObj
   );
 
   { TResourceManager }
@@ -99,6 +103,7 @@ type
     function PerformLoad(p: TResourceProvider; res: TResourceObject; isReload: Boolean): TLoadResult;
 
     procedure Log(const logMsg: TResouceManagerLog; const refName: string; param1: Int64 = 0; param2: Int64 = 0);
+    procedure UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader);
   public
     LogProc   : procedure (Sender: TResourceManager;
                   const logMsg: TResouceManagerLog;
@@ -258,7 +263,7 @@ begin
     Exit;
   end;
   if forced then begin
-    Result:=TResourceObject.Create(refName);
+    Result:=TResourceObject.Create(refName, Self);
     resList.AddObject(refName, Result);
   end else
     Result:=nil;
@@ -307,49 +312,53 @@ var
 begin
   Result := FindLoader(p, res.RefName, st, ld);
   if Result<>lrSuccess then Exit;
-
-  if isReload then begin
-    loadedFlag := [rfReloaded];
-    loadingFlag := [rfReloading];
-    loadLog := noteStartReloading;
-  end else begin
-    loadedFlag := [rfLoaded];
-    loadingFlag := [rfLoading];
-    loadLog := noteStartLoading;
-  end;
-
-  res.AddFlags(loadingFlag);
   try
-    Log(loadLog, res.RefName);
-
-    if not ld.LoadResource(res.RefName, st, sz, obj) then begin
-      Log(wantFailToLoad, res.RefName);
-      Result:=lrErrFailToLoad;
-      Exit;
-    end;
-    if not Assigned(obj) then begin
-      Log(warnAbnormalLoad, res.RefName);
-      Result:=lrErrFailToLoad;
-      Exit;
+    if isReload then begin
+      loadedFlag := [rfReloaded];
+      loadingFlag := [rfReloading];
+      loadLog := noteStartReloading;
+    end else begin
+      loadedFlag := [rfLoaded];
+      loadingFlag := [rfLoading];
+      loadLog := noteStartLoading;
     end;
 
-    res.Lock;
+    res.AddFlags(loadingFlag);
     try
-      if isReload then begin
-        res.reloadedWith := ld;
-        res.reloadObj := obj;
-      end else begin
-        res.loadedWith := ld;
-        res.loadObj := obj;
+      Log(loadLog, res.RefName);
+
+      if not ld.LoadResource(res.RefName, st, sz, obj) then begin
+        Log(wantFailToLoad, res.RefName);
+        Result:=lrErrFailToLoad;
+        Exit;
       end;
-      res.AddFlags(loadedFlag);
+      if not Assigned(obj) then begin
+        Log(warnAbnormalLoad, res.RefName);
+        Result:=lrErrFailToLoad;
+        Exit;
+      end;
+
+      res.Lock;
+      try
+        if isReload then begin
+          res.reloadedWith := ld;
+          res.reloadObj := obj;
+        end else begin
+          res.loadedWith := ld;
+          res.loadObj := obj;
+        end;
+        res.AddFlags(loadedFlag);
+      finally
+        res.Unlock;
+      end;
+      Log(noteLoadSuccess, res.RefName);
+      Result := lrLoaded;
     finally
-      res.Unlock;
+      res.RemoveFlags(loadingFlag);
     end;
-    Log(noteLoadSuccess, res.RefName);
-    Result := lrLoaded;
   finally
-    res.RemoveFlags(loadingFlag);
+    p.StreamDone(st);
+    st.Free;
   end;
 end;
 
@@ -357,9 +366,19 @@ procedure TResourceManager.Log(const logMsg: TResouceManagerLog;
   const refName: string; param1: Int64 = 0; param2: Int64 = 0);
 begin
   try
-    if Assigned(LogProc) then
+    if Assigned(LogProc) then begin
+      writeln('assigned log proc?');
       LogProc(Self, logMsg, refName, param1, param2);
+    end;
   except
+  end;
+end;
+
+procedure TResourceManager.UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader);
+begin
+  if ASsigned(loadedWith) and Assigned(obj) then begin
+    loadedWith.UnloadResource(refName, obj);
+    Log(noteUnloadedResObj, refName);
   end;
 end;
 
@@ -458,18 +477,51 @@ begin
   end;
 end;
 
-constructor TResourceObject.Create(const ARefName: string);
+function TResourceObject.SwapLoads(unloadLoaded: Boolean): Boolean;
+var
+  un  : TObject;
+  unl : TResourceLoader;
+begin
+  Result:=Assigned(loadObj) and Assigned(reloadObj);
+  if not Result then Exit;
+
+  Lock;
+  try
+    un := loadObj;
+    unl := loadedWith;
+    loadObj := reloadObj;
+    loadedWith := reloadedWith;
+    reloadObj := nil;
+    reloadedWith := nil;
+  finally
+    Unlock;
+  end;
+  manager.UnloadResObj(refName, un, unl);
+end;
+
+procedure TResourceObject.UnloadAll;
+begin
+  if Assigned(loadObj) and Assigned(loadedWith) then
+    manager.UnloadResObj(refName, loadObj, loadedWith);
+
+  if Assigned(reloadObj) and Assigned(reloadedWith) then
+    manager.UnloadResObj(refName, reloadObj, reloadedWith);
+end;
+
+constructor TResourceObject.Create(const ARefName: string; AManager: TResourceManager);
 begin
   inherited Create;
   InitCriticalSection(flock);
   Handlers := TList.Create;
   fRefName := ARefName;
+  fManager := AManager;
 end;
 
 destructor TResourceObject.Destroy;
 begin
   DoneCriticalsection(flock);
   Handlers.free;
+  UnloadAll;
   inherited Destroy;
 end;
 
