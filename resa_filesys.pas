@@ -59,7 +59,7 @@ var
   pth : UnicodeString;
 begin
   pth := basePath + UTF8Decode(refName);
-  Result := FileExists(refName);
+  Result := FileExists(pth);
 end;
 
 {$ifdef mswindows}
