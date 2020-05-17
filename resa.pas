@@ -144,6 +144,13 @@ type
 
 function CheckNeedsLoad(hnd : TResourceHandler): Boolean;
 
+type
+  // conventional external (non-pascal) resource
+  TExternalResource = class(TObject)
+    resRef    : Pointer;
+    resRefNum : Integer;
+  end;
+
 implementation
 
 uses
