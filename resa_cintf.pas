@@ -27,6 +27,7 @@ function ResHndRelease(var res: TResHandle): TResError; cdecl;
 function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl;
 function ResHndSetFixed(res: TResHandle; isFixed: LongBool): TResError; cdecl;
 function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
+function ResHndReloadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndGetObj(res: TResHandle; var resource: Pointer; var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
 
 function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
@@ -279,7 +280,7 @@ begin
   end;
 
   refName := GetResName(arefName);
-  if not FindResource(refName, p) then
+  if not FindProvider(refName, p) then
     Result:=RES_NO_RESOURCE
   else
     Result:=RES_SUCCESS;
@@ -305,7 +306,19 @@ var
 begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
-  res := hnd.Owner.manager.LoadResourceSync(hnd);
+  res := hnd.Owner.manager.LoadResourceSync(hnd.Owner, false);
+  Result := LoadErrorToResError[res];
+end;
+
+function ResHndReloadSync(ahnd: TResHandle): TResError; cdecl;
+var
+  hnd : TResourceHandler;
+  p   : TResourceProvider;
+  res : TLoadResult;
+begin
+  if not ResHndSanityCheck(ahnd, Result) then Exit;
+  hnd := TResourceHandler(ahnd);
+  res := hnd.Owner.manager.LoadResourceSync(hnd.Owner, true);
   Result := LoadErrorToResError[res];
 end;
 

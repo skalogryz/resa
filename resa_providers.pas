@@ -12,8 +12,8 @@ var
 
 procedure RegisterProvider(p: TResourceProvider);
 procedure UnregisterProvider(p: TResourceProvider);
-function FindResource(const refName: string; out p: TResourceProvider): Boolean; overload;
-function FindResource(const refName: string; plist: TList): Boolean; overload;
+function FindProvider(const refName: string; out p: TResourceProvider): Boolean; overload;
+function FindProvider(const refName: string; plist: TList): Boolean; overload;
 
 implementation
 
@@ -29,13 +29,13 @@ begin
   providers.Remove(p);
 end;
 
-function FindResource(const refName: string; out p: TResourceProvider): Boolean; overload;
+function FindProvider(const refName: string; out p: TResourceProvider): Boolean; overload;
 var
   pl : TList;
 begin
   pl := TList.Create;
   try
-    Result := FindResource(refName, pl);
+    Result := FindProvider(refName, pl);
     if Result then
       p := TResourceProvider(pl[0])
     else
@@ -45,7 +45,7 @@ begin
   end;
 end;
 
-function FindResource(const refName: string; plist: TList): Boolean; overload;
+function FindProvider(const refName: string; plist: TList): Boolean; overload;
 var
   i : integer;
   p : TResourceProvider;

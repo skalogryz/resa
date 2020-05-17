@@ -120,7 +120,7 @@ type
     function RegisterResource(const refName: string): TResourceObject;
     function ResourceExists(const refName: string): TResourceObject;
 
-    function LoadResourceSync(hnd: TResourceHandler): TLoadResult;
+    function LoadResourceSync(res: TResourceObject; Reload: Boolean): TLoadResult;
   end;
 
   TResourceProvider = class(TObject)
@@ -145,7 +145,7 @@ type
       virtual; abstract;
   end;
 
-function CheckNeedsLoad(hnd : TResourceHandler): Boolean;
+function CheckNeedsLoad(flags: TResourceFlags): Boolean;
 
 type
   // conventional external (non-pascal) resource
@@ -163,9 +163,9 @@ implementation
 uses
   resa_providers, resa_loaders;
 
-function CheckNeedsLoad(hnd : TResourceHandler): Boolean;
+function CheckNeedsLoad(flags: TResourceFlags): Boolean;
 begin
-  Result := (hnd.Owner.GetFlags *[rfLoading, rfLoaded, rfReloading, rfReloaded]) = [];
+  Result := (flags *[rfLoading, rfLoaded, rfReloading, rfReloaded]) = [];
 end;
 
 { TResourceLoader }
@@ -376,26 +376,37 @@ begin
 end;
 
 
-function TResourceManager.LoadResourceSync(hnd: TResourceHandler): TLoadResult;
+function TResourceManager.LoadResourceSync(res: TResourceObject; Reload: Boolean): TLoadResult;
 var
   p : TResourceProvider;
+  isReload: Boolean;
 begin
-  hnd.OwnerLock;
+  res.Lock;
   try
-    if not CheckNeedsLoad(hnd) then begin
-      Result:=lrAlreadyLoaded;
-      Exit;
-    end;
-    FindResource(hnd.Owner.RefName, p);
-    if p = nil then begin
-      Result:=lrErrNoPhysResource;
-      Exit;
+    if Reload then begin
+      if res.Flags * [rfLoaded, rfLoading] = [] then
+        Reload := false; // the file has not been loaded yet
     end;
 
-    Result := PerformLoad(p, hnd.Owner, false);
+    if not Reload and (res.Flags * [rfLoaded, rfLoading] <> []) then begin
+      Result:=lrAlreadyLoaded;
+      Exit;
+    end else if Reload and (res.Flags * [rfReloading] <> []) then begin
+      // it's ok to reload already loaded object
+      Result:=lrAlreadyLoaded; // don't interrupt reloading
+      Exit;
+    end;
   finally
-    hnd.OwnerUnlock;
+    res.Unlock;
   end;
+
+  FindProvider(res.RefName, p);
+  if p = nil then begin
+    Result:=lrErrNoPhysResource;
+    Exit;
+  end;
+
+  Result := PerformLoad(p, res, Reload);
 end;
 
 { TResourceObject }
