@@ -1,6 +1,6 @@
 unit resa_providers;
 
-{$mode objfpc}{$H+}
+{$mode delphi}{$H+}
 
 interface
 
@@ -12,8 +12,8 @@ var
 
 procedure RegisterProvider(p: TResourceProvider);
 procedure UnregisterProvider(p: TResourceProvider);
-function FindResource(const refName: string; out p: TResourceProvider): Boolean;
-function FindResource(const refName: string; plist: TList): Boolean;
+function FindResource(const refName: string; out p: TResourceProvider): Boolean; overload;
+function FindResource(const refName: string; plist: TList): Boolean; overload;
 
 implementation
 
@@ -29,7 +29,7 @@ begin
   providers.Remove(p);
 end;
 
-function FindResource(const refName: string; out p: TResourceProvider): Boolean;
+function FindResource(const refName: string; out p: TResourceProvider): Boolean; overload;
 var
   pl : TList;
 begin
@@ -42,7 +42,7 @@ begin
   end;
 end;
 
-function FindResource(const refName: string; plist: TList): Boolean;
+function FindResource(const refName: string; plist: TList): Boolean; overload;
 var
   i : integer;
   p : TResourceProvider;

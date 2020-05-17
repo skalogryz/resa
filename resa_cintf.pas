@@ -1,6 +1,6 @@
 unit resa_cintf;
 
-{$mode objfpc}{$H+}
+{$mode delphi}{$H+}
 
 interface
 
@@ -11,9 +11,17 @@ type
   TResManagerHandle = PtrUInt;
   TResHandle = PtrUInt;
   TResError = type Integer;
+  TResManCallBack = procedure(
+    man: TResManagerHandle;
+    event: LongWord;
+    const resRef: PChar;
+    const param1, param2: Int64;
+    UserData: Pointer
+  ); cdecl;
 
 function ResManAlloc(out man: TResManagerHandle): TResError; cdecl;
 function ResManRelease(var man: TResManagerHandle): TResError; cdecl;
+function ResManSetCallback(man: TResManagerHandle; logproc: TResManCallBack; userData: Pointer): TResError; cdecl;
 function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var res: TResHandle): TResError; cdecl;
 function ResHndRelease(var res: TResHandle): TResError; cdecl;
 function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl;
@@ -36,7 +44,32 @@ const
   RES_NO_SOURCES    = -300;
   RES_NO_SOURCEROOT = -301;
 
+const
+  EVENT_START_LOAD      = 10;
+  EVENT_START_RELOAD    = 11;
+  EVENT_LOAD_SUCCESS    = 12;
+  EVENT_UNLOADED_RES    = 13;
+  EVENT_W_FAIL_TOLOAD   = 1000;
+  EVENT_W_ABNORMAL_LOAD = 1001;
+
 implementation
+
+type
+
+  { TResManHandle }
+
+  TResManHandle = class(TObject)
+    manager    : TResourceManager;
+    logCallback: TResManCallBack;
+    logUserData: Pointer;
+    procedure ManLog(Sender: TResourceManager;
+      const logMsg: TResouceManagerLog;
+      const refName: string;
+      param1: Int64 = 0; param2: Int64 = 0);
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
 
 function GetResName(const nm: PUnicodeChar): string;
 var
@@ -49,10 +82,21 @@ begin
   end;
 end;
 
+function SanityCheckManHandle(ahandle: TResManagerHandle;
+  out handleObj: TResManHandle;
+  out resError: TResError): Boolean; inline;
+begin
+  Result := (Ahandle<>0)
+    and (TObject(Ahandle) is TResManHandle);
+  if not Result then resError := RES_INV_PARAMS
+  else resError := RES_SUCCESS;
+  handleObj := TResManHandle(AHandle);
+end;
+
 function ResManAlloc(out man: TResManagerHandle): TResError; cdecl;
 begin
   try
-    man:=TResManagerHandle(TResourceManager.Create);
+    man:=TResManagerHandle(TResManHandle.Create);
     Result:=RES_SUCCESS;
   except
     man:=0;
@@ -61,17 +105,30 @@ begin
 end;
 
 function ResManRelease(var man: TResManagerHandle): TResError; cdecl;
+var
+  h: TResManHandle;
 begin
-  if man = 0 then begin
-    Result:=RES_INV_PARAMS;
-    Exit;
-  end;
+  if not SanityCheckManHandle(man, h, Result) then Exit;
   try
-    TResourceManager(man).Free;
+    h.Free;
     Result:=RES_SUCCESS;
   except
     Result:=RES_INT_ERROR;
   end;
+end;
+
+function ResManSetCallback(man: TResManagerHandle; logproc: TResManCallBack; userData: Pointer): TResError; cdecl;
+var
+  h: TResManHandle;
+begin
+  if not SanityCheckManHandle(man, h, Result) then Exit;
+  //todo: need a lock here
+  h.logCallback:=logproc;
+  h.logUserData:=userData;
+  if Assigned(logproc) then
+    h.manager.LogProc := h.ManLog
+  else
+    h.manager.LogProc := nil;
 end;
 
 function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var res: TResHandle): TResError; cdecl;
@@ -84,7 +141,7 @@ begin
     Exit;
   end;
   refName := GetResName(arefName);
-  ro := TResourceManager(man).RegisterResource(refName);
+  ro := TResManHandle(man).manager.RegisterResource(refName);
   if ro = nil then begin
     Result:=RES_INT_ERROR;
     Exit;
@@ -206,6 +263,45 @@ begin
   hnd := TResourceHandler(ahnd);
   res := hnd.Owner.manager.LoadResourceSync(hnd);
   Result := LoadErrorToResError[res];
+end;
+
+{ TResManHandle }
+
+
+const
+  ResouceManagerLogToEvent : array [TResouceManagerLog] of LongWord = (
+    EVENT_START_LOAD,      // noteStartLoading,
+    EVENT_START_RELOAD,    // noteStartReloading,
+    EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
+    EVENT_W_ABNORMAL_LOAD, // warnAbnormalLoad, // function returned true, but no object was provided
+    EVENT_LOAD_SUCCESS,    // noteLoadSuccess,
+    EVENT_UNLOADED_RES     // noteUnloadedResObj
+  );
+
+procedure TResManHandle.ManLog(Sender: TResourceManager;
+  const logMsg: TResouceManagerLog; const refName: string; param1: Int64;
+  param2: Int64);
+begin
+  if not Assigned(logCallback) then Exit;
+  logCallback(
+    TResManagerHandle(Self),
+    ResouceManagerLogToEvent[logMsg],
+    PChar(refName),
+    param1, param2,
+    logUserData
+  );
+end;
+
+constructor TResManHandle.Create;
+begin
+  inherited Create;
+  manager := TResourceManager.Create;
+end;
+
+destructor TResManHandle.Destroy;
+begin
+  manager.Free;
+  inherited Destroy;
 end;
 
 end.

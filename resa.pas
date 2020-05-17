@@ -84,10 +84,10 @@ type
   TResouceManagerLog = (
     noteStartLoading,
     noteStartReloading,
-    wantFailToLoad,
-    warnAbnormalLoad, // function returned true, but no object was provided
     noteLoadSuccess,
-    noteUnloadedResObj
+    noteUnloadedResObj,
+    wantFailToLoad,
+    warnAbnormalLoad  // function returned true, but no object was provided
   );
 
   { TResourceManager }
@@ -142,18 +142,6 @@ type
       virtual; abstract;
   end;
 
-  { TBufLoader }
-
-  TBufLoader = class(TResourceLoader)
-    function CanLoad(const refName: string; stream: TStream): Boolean; override;
-    function EstimateMem(const refName: string; stream: TStream; var ExpectedMem: QWord): Boolean; override;
-    function LoadResource(
-      const refName: string; stream: TStream;
-      out Size: QWord; out resObject: TObject
-    ): Boolean; override;
-    function UnloadResource(const refName: string; var resObject: TObject): Boolean; override;
-  end;
-
 function CheckNeedsLoad(hnd : TResourceHandler): Boolean;
 
 implementation
@@ -166,16 +154,6 @@ begin
   Result := (hnd.Owner.GetFlags *[rfLoading, rfLoaded, rfReloading, rfReloaded]) = [];
 end;
 
-{ TBufLoader }
-
-type
-
-  { TMemBuf }
-
-  TMemBuf = class(TObject)
-    mem : Pointer;
-  end;
-
 { TResourceLoader }
 
 function TResourceLoader.EstimateMem(const refName: string; stream: TStream;
@@ -185,40 +163,6 @@ begin
 end;
 
 { TResourceLoader }
-
-function TBufLoader.CanLoad(const refName: string; stream: TStream): Boolean;
-begin
-  Result := true; // yeah... anything can be pushed to RAM!
-end;
-
-function TBufLoader.EstimateMem(const refName: string; stream: TStream;
-  var ExpectedMem: QWord): Boolean;
-begin
-  ExpectedMem := stream.Size;
-  Result := true;
-end;
-
-function TBufLoader.LoadResource(const refName: string; stream: TStream; out
-  Size: QWord; out resObject: TObject): Boolean;
-var
-  buf : TMemBuf;
-begin
-  buf := TMemBuf.Create;
-  buf.mem := AllocMem(stream.Size);
-  Size := stream.Read(buf.mem^, stream.size);
-  resObject := buf;
-  Result := true;
-end;
-
-function TBufLoader.UnloadResource(const refName: string; var resObject: TObject): Boolean;
-begin
-  Result := resObject is TMemBuf;
-  if not Result then Exit;
-  FreeMem(TMemBuf(resObject).mem);
-  TMemBuf(resObject).mem:=nil;
-  resObject.Free;
-  resObject := nil;
-end;
 
 { TResourceHandler }
 
@@ -366,10 +310,8 @@ procedure TResourceManager.Log(const logMsg: TResouceManagerLog;
   const refName: string; param1: Int64 = 0; param2: Int64 = 0);
 begin
   try
-    if Assigned(LogProc) then begin
-      writeln('assigned log proc?');
+    if Assigned(LogProc) then
       LogProc(Self, logMsg, refName, param1, param2);
-    end;
   except
   end;
 end;

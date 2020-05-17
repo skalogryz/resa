@@ -1,6 +1,6 @@
 unit resa_filesys;
 
-{$mode objfpc}{$H+}
+{$mode delphi}{$H+}
 
 interface
 
