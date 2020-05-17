@@ -85,12 +85,13 @@ type
     unloadProc  : TUnloadProc;
   end;
 
-function ResLoaderRegister(loaderData: Pointer; const procRef: TResourceLoaderSt): TResError;
-function ResLoaderUnregister(loaderData: Pointer): TResError;
+function ResLoaderRegister(loaderData: Pointer; const procRef: TResourceLoaderSt): TResError; cdecl;
+function ResLoaderUnregister(loaderData: Pointer): TResError; cdecl;
 
 function StreamRead(streamRef: TStreamRef; dst: PByte; dstSize: Integer): Integer; cdecl;
-function StreamGetSize(streamRef: TStreamRef): Int64;
-function StreamSetPos(streamRef: TStreamRef; apos: Int64): LongBool;
+function StreamGetSize(streamRef: TStreamRef): Int64; cdecl;
+function StreamSetPos(streamRef: TStreamRef; apos: Int64): LongBool; cdecl;
+function StreamGetPos(streamRef: TStreamRef): Int64; cdecl;
 
 implementation
 
@@ -375,6 +376,11 @@ begin
   except
     Result:=false;
   end;
+end;
+
+function StreamGetPos(streamRef: TStreamRef): Int64; cdecl;
+begin
+  Result:=TStream(streamRef).Position;
 end;
 
 type
