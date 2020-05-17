@@ -30,6 +30,9 @@ type
 function ResManAlloc(out man: TResManagerHandle): TResError; cdecl;
 function ResManRelease(var man: TResManagerHandle): TResError; cdecl;
 function ResManSetCallback(man: TResManagerHandle; logproc: TResManCallBack; userData: Pointer): TResError; cdecl;
+function ResManGetMemLimit(man: TResManagerHandle; var newlimit: UInt64): TResError; cdecl;
+function ResManSetMemLimit(man: TResManagerHandle; newlimit: UInt64): TResError; cdecl;
+
 function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var res: TResHandle): TResError; cdecl;
 function ResHndRelease(var res: TResHandle): TResError; cdecl;
 function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl;
@@ -51,6 +54,7 @@ function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
 function ResExists(const arefName: PUnicodeChar): TResError; cdecl;
 
 const
+  RES_SUCCESS_ALREADY = 2;
   RES_SCHEDULED     = 1;
   RES_NO_ERROR      = 0;
   RES_SUCCESS       = RES_NO_ERROR;
@@ -391,7 +395,7 @@ const
   LoadErrorToResError : array [TLoadResult] of  TResError = (
    RES_SUCCESS,     // lrSuccess,
    RES_SUCCESS,     // lrLoaded,
-   RES_SUCCESS,     // lrAlreadyLoaded,
+   RES_SUCCESS_ALREADY, // lrAlreadyLoaded,
    RES_SCHEDULED,   // lrLoadScheduled,
    RES_CANCEL_LOAD, // lrLoadCancelled,
    RES_NO_RESOURCE, // lrErrNoPhysResource,
@@ -721,6 +725,35 @@ begin
 
   swr := hnd.Owner.Manager.SwapResObj(hnd.Owner);
   Result := SwapResultToResError[swr];
+end;
+
+function ResManGetMemLimit(man: TResManagerHandle; var newlimit: UInt64): TResError; cdecl;
+var
+  h: TResManHandle;
+begin
+  newlimit := 0;
+  if not SanityCheckManHandle(man, h, Result) then Exit;
+  h.manager.Lock;
+  try
+    newlimit := h.manager.maxMem;
+    Result:=RES_SUCCESS;
+  except
+    h.manager.Unlock;
+  end;
+end;
+
+function ResManSetMemLimit(man: TResManagerHandle; newlimit: UInt64): TResError; cdecl;
+var
+  h: TResManHandle;
+begin
+  if not SanityCheckManHandle(man, h, Result) then Exit;
+  h.manager.Lock;
+  try
+    h.manager.maxMem:=newlimit;
+    Result:=RES_SUCCESS;
+  except
+    h.manager.Unlock;
+  end;
 end;
 
 end.

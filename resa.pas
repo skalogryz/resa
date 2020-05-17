@@ -114,6 +114,7 @@ type
   TResourceManager = class(TObject)
   private
     resList : THashedStringListEx;
+    flock     : TRTLCriticalSection;
     function GetResource(const refName: string; forced: Boolean): TResourceObject;
 
     function FindLoader(p: TResourceProvider; const refName: string; out st: TStream;
@@ -128,7 +129,6 @@ type
                   const logMsg: TResouceManagerLog;
                   const refName: string;
                   param1: Int64 = 0; param2: Int64 = 0) of object;
-    lock      : TRTLCriticalSection;
     maxMem    : QWord;
     maxThread : LongWord;
     constructor Create;
@@ -140,6 +140,9 @@ type
     function UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
 
     function SwapResObj(res: TResourceObject): TSwapResult;
+
+    procedure Lock;
+    procedure Unlock;
   end;
 
   TResourceProvider = class(TObject)
@@ -372,9 +375,9 @@ end;
 constructor TResourceManager.Create;
 begin
   inherited Create;
-  InitCriticalSection(lock);
+  InitCriticalSection(flock);
   resList:=THashedStringListEx.Create;
-  maxMem:=High(Int64);
+  maxMem:=0; // limitless
   maxThread:=4;
 end;
 
@@ -385,27 +388,27 @@ begin
   for i:=0 to resList.Count-1 do
     TObject(resList.Objects[i]).Free;
   resList.Free;
-  DoneCriticalsection(lock);
+  DoneCriticalsection(flock);
   inherited Destroy;
 end;
 
 function TResourceManager.RegisterResource(const refName: string): TResourceObject;
 begin
-  EnterCriticalsection(lock);
+  Lock;
   try
     Result := GetResource(refName, true);
   finally
-    LeaveCriticalsection(lock);
+    Unlock;
   end;
 end;
 
 function TResourceManager.ResourceExists(const refName: string): TResourceObject;
 begin
-  EnterCriticalsection(lock);
+  Lock;
   try
     Result := GetResource(refName, true);
   finally
-    LeaveCriticalsection(lock);
+    Unlock;
   end;
 end;
 
@@ -500,6 +503,16 @@ begin
   Log(noteSwapped, res.refName);
 end;
 
+procedure TResourceManager.Lock;
+begin
+  EnterCriticalsection(flock);
+end;
+
+procedure TResourceManager.Unlock;
+begin
+  LeaveCriticalsection(flock);
+end;
+
 { TResourceObject }
 
 function TResourceObject.GetFlags: TResourceFlags;
@@ -587,6 +600,10 @@ var
 begin
   for i:=0 to Tags.Count-1 do
     TObject(Tags[i]).Free;
+  for i:=0 to Handlers.count-1 do begin
+    TResourceHandler(Handlers[i]).fOwner:=nil;
+    TObject(Handlers[i]).Free;
+  end;
   Tags.Free;
   DoneCriticalsection(flock);
   Handlers.free;
