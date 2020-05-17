@@ -7,6 +7,7 @@ uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
+  Math,
   Classes, SysUtils, resa_cintf, resa, resa_filesys, resa_providers, resa_loaders;
 
 procedure TestAllocation;
@@ -51,10 +52,56 @@ begin
   writeln('check existance of ',fn,': ', ResExists(PUnicodeChar(u)));
 end;
 
-procedure RegisterDefaults;
+procedure canLoadRes(LoaderData: Pointer;
+    const refName: PChar;
+    const streamRef: Pointer;
+    var CanLoad: Integer
+  ); cdecl;
 begin
+  CanLoad := 1;
+end;
+
+procedure LoadRes(LoaderData: Pointer;
+    const refName: PChar;
+    const streamRef: Pointer;
+    var Size: Int64;
+    var Resource: Pointer;
+    var ResRefNum: Integer
+  ); cdecl;
+var
+  szLeft : Int64;
+  p : PByte;
+  rd : integer;
+begin
+  Size := StreamGetSize(streamRef);
+  Resource := AllocMem(Size);
+  szLeft := Size;
+  p:=Resource;
+  while szLeft>0 do begin
+    rd:=StreamRead(streamRef, p, Max(szLeft, MaxInt));
+    if rd<=0 then Break;
+    dec(szLeft, rd);
+    p:=p+szLeft;
+  end;
+  writeln('loaded at: ', PtrUInt(Resource));
+end;
+
+procedure UnloadRes(LoaderData: Pointer; Resource: Pointer; ResRefNum: Integer); cdecl;
+begin
+  FreeMem(Resource);
+end;
+
+procedure RegisterDefaults;
+var
+  st : TResourceLoaderSt;
+begin
+  st.canLoadProc := @canLoadRes;
+  st.loadProc := @loadRes;
+  st.unloadProc := @unloadRes;
+
   ResSourceAddDir('.');
-  RegisterLoader(TBufLoader.Create);
+  ResLoaderRegister(nil, st);
+  //RegisterLoader(TBufLoader.Create);
 end;
 
 function EvenToStr(event: LongWord): string;
@@ -92,6 +139,8 @@ var
   u   : UnicodeString;
   man : TResManagerHandle;
   res : TResManagerHandle;
+  p   : Pointer;
+  ref : Integer;
 begin
   fn := ExtractFileName(ParamStr(0));
   u := fn;
@@ -99,7 +148,14 @@ begin
   writeln('ResManAlloc     = ', ResManAlloc(man));
   if withLog then SetLog(man);
   writeln('ResHndAlloc     = ', ResHndAlloc(man, PUnicodeChar(u), res));
+  writeln('ResHndGetObj    = ', ResHndGetObj(res, p, ref, 0));
+  writeln('  loaded obj = ', PtrUInt(p));
+
   writeln('ResHndLoadSync  = ', ResHndLoadSync(res));
+
+  writeln('ResHndGetObj    = ', ResHndGetObj(res, p, ref, 0));
+  writeln('  loaded obj = ', PtrUInt(p));
+
   writeln('ResHndRelease   = ', ResHndRelease(res));
   writeln('ResManRelease   = ', ResManRelease(man));
 end;
@@ -107,6 +163,6 @@ end;
 begin
   //TestAllocation;
   //TestProvider;
-  TestLoad;
+  TestLoad(true);
 end.
 
