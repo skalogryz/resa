@@ -38,6 +38,7 @@ function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndReloadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndGetObj(res: TResHandle; var resource: Pointer; var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
 function ResHndUnloadSync(ahnd: TResHandle; unloadReloadObj: Integer): TResError; cdecl;
+function ResHndSwap(res: TResHandle): TResError; cdecl;
 
 const
   EVENTRES_AFTER_LOAD    = $02;
@@ -61,6 +62,7 @@ const
   RES_FAIL_LOAD     = -5;    // the resource file was not loaded, due to some problems with the loader
   RES_NOT_LOADED    = -6;    // the resource has not been loaded yet
   RES_CANCEL_LOAD   = -7;    // the resource loading was cancelled by the user
+  RES_NOT_RELOADED  = -8;    // the resource doesn't have an alternative loaded
   RES_INVALID_FMT   = -101;  // the resource was loaded, but the internal format is not recognizable. (internal error)
   RES_NO_SOURCES    = -300;  // no sources were registered
   RES_NO_SOURCEROOT = -301;  // the specified directory cannot be found for directory source
@@ -72,6 +74,7 @@ const
   EVENT_UNLOADED_RES    = 13;
   EVENT_LOAD_CANCEL     = 14;
   EVENT_UNLOAD_START    = 15;
+  EVENT_SWAPPED         = 16;
   EVENT_W_FAIL_TOLOAD   = 1000;
   EVENT_W_ABNORMAL_LOAD = 1001;
 
@@ -484,6 +487,7 @@ const
     EVENT_UNLOAD_START,    // noteUnloadingResObj
     EVENT_UNLOADED_RES,    // noteUnloadedResObj
     EVENT_LOAD_CANCEL,     // noteLoadCancel
+    EVENT_SWAPPED,         // noteSwapped
     EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
     EVENT_W_ABNORMAL_LOAD  // warnAbnormalLoad, // function returned true, but no object was provided
   );
@@ -697,6 +701,26 @@ begin
   UnloadProc(LoaderData, er.resRef, er.resRefNum);
   resObject.Free;
   Result:=true;
+end;
+
+const
+  SwapResultToResError : array [TSwapResult] of TResError = (
+   RES_SUCCESS,     // srSuccess,
+   RES_INV_PARAMS,  // srInvResource,
+   RES_NOT_LOADED,  // srNotLoaded,
+   RES_NOT_RELOADED // srNotReloaded
+  );
+
+function ResHndSwap(res: TResHandle): TResError; cdecl;
+var
+  hnd : TResourceHandler;
+  swr : TSwapResult;
+begin
+  if not ResHndSanityCheck(res, Result) then Exit;
+  hnd := TResourceHandler(res);
+
+  swr := hnd.Owner.Manager.SwapResObj(hnd.Owner);
+  Result := SwapResultToResError[swr];
 end;
 
 end.

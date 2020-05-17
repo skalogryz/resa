@@ -39,6 +39,9 @@ type
     fManager : TResourceManager;
     procedure UnloadAll;
     procedure UnloadInfo(var inf: TResObjectInfo; isReloadObj: Boolean);
+
+    function SwapLoads: Boolean;
+    procedure ClearLoad(i: integer);
   public
     Flags      : TResourceFlags;
     resObj     : array [0..1] of TResObjectInfo;
@@ -53,8 +56,6 @@ type
     function GetFlags: TResourceFlags;
     procedure AddFlags(fl: TResourceFlags);
     procedure RemoveFlags(fl: TResourceFlags);
-    function SwapLoads: Boolean;
-    procedure ClearLoad(i: integer);
     property RefName: string read fRefName; // readonly. no need to lock
     property Manager: TResourceManager read fManager;
   end;
@@ -96,8 +97,16 @@ type
     noteUnloadingResObj,
     noteUnloadedResObj,
     noteLoadCancel,
+    noteSwapped,
     wantFailToLoad,
     warnAbnormalLoad  // function returned true, but no object was provided
+  );
+
+  TSwapResult = (
+    srSuccess,
+    srInvResource,
+    srNotLoaded,
+    srNotReloaded
   );
 
   { TResourceManager }
@@ -129,6 +138,8 @@ type
 
     function LoadResourceSync(res: TResourceObject; Reload: Boolean): TLoadResult;
     function UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
+
+    function SwapResObj(res: TResourceObject): TSwapResult;
   end;
 
   TResourceProvider = class(TObject)
@@ -469,6 +480,24 @@ begin
     res.Unlock;
   end;
 
+end;
+
+function TResourceManager.SwapResObj(res: TResourceObject): TSwapResult;
+begin
+  if not Assigned(res) then begin
+    Result:=srInvResource;
+    Exit;
+  end;
+  if not (rfLoaded in res.Flags) then begin
+    Result:=srNotLoaded;
+    Exit;
+  end;
+  if (rfReloading in res.Flags) or not (rfReloaded in res.Flags) then begin
+    Result:=srNotReloaded;
+    Exit;
+  end;
+  res.SwapLoads;
+  Log(noteSwapped, res.refName);
 end;
 
 { TResourceObject }
