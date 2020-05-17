@@ -110,6 +110,7 @@ begin
     EVENT_START_LOAD      : Result := 'EVENT_START_LOAD';
     EVENT_START_RELOAD    : Result := 'EVENT_START_RELOAD';
     EVENT_LOAD_SUCCESS    : Result := 'EVENT_LOAD_SUCCESS';
+    EVENT_UNLOAD_START    : Result := 'EVENT_UNLOAD_START';
     EVENT_UNLOADED_RES    : Result := 'EVENT_UNLOADED_RES';
     EVENT_W_FAIL_TOLOAD   : Result := 'EVENT_W_FAIL_TOLOAD';
     EVENT_W_ABNORMAL_LOAD : Result := 'EVENT_W_ABNORMAL_LOAD';
@@ -145,24 +146,80 @@ begin
   fn := ExtractFileName(ParamStr(0));
   u := fn;
   RegisterDefaults;
-  writeln('ResManAlloc     = ', ResManAlloc(man));
+  writeln('ResManAlloc      = ', ResManAlloc(man));
   if withLog then SetLog(man);
-  writeln('ResHndAlloc     = ', ResHndAlloc(man, PUnicodeChar(u), res));
-  writeln('ResHndGetObj    = ', ResHndGetObj(res, p, ref, 0));
+  writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u), res));
+  writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
 
-  writeln('ResHndLoadSync  = ', ResHndLoadSync(res));
+  writeln('ResHndLoadSync   = ', ResHndLoadSync(res));
 
-  writeln('ResHndGetObj    = ', ResHndGetObj(res, p, ref, 0));
+  writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
 
-  writeln('ResHndRelease   = ', ResHndRelease(res));
-  writeln('ResManRelease   = ', ResManRelease(man));
+  writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+
+  writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
+  writeln('  loaded obj = ', PtrUInt(p));
+
+  writeln('ResHndRelease    = ', ResHndRelease(res));
+  writeln('ResManRelease    = ', ResManRelease(man));
+end;
+
+
+procedure ResCb1(
+    man : TResManagerHandle;
+    event : LongWord;
+    const resRef: PChar;
+    const param1, param2: Int64;
+    userData: Pointer
+  ); cdecl;
+begin
+  writeln('CB1 [',GetCurrentThreadId,'] ev=',EvenToStr(event),'; res=',resRef, '; p1=',param1, '; p2=',param2);
+end;
+
+procedure ResCb2(
+    man : TResManagerHandle;
+    event : LongWord;
+    const resRef: PChar;
+    const param1, param2: Int64;
+    userData: Pointer
+  ); cdecl;
+begin
+  writeln('CB2 [',GetCurrentThreadId,'] ev=',EvenToStr(event),'; res=',resRef, '; p1=',param1, '; p2=',param2);
+end;
+
+procedure TestLoadCallback(withLog: Boolean = false);
+var
+  fn  : string;
+  u   : UnicodeString;
+  man : TResManagerHandle;
+  res : TResManagerHandle;
+  p   : Pointer;
+  ref : Integer;
+begin
+  fn := ExtractFileName(ParamStr(0));
+  u := fn;
+  RegisterDefaults;
+  writeln('ResManAlloc      = ', ResManAlloc(man));
+  if withLog then SetLog(man);
+  writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u), res));
+
+  ResHndAddCallback(res, @ResCb1, EVENTRES_AFTER_LOAD or EVENTRES_BEFORE_UNLOAD, nil);
+  ResHndAddCallback(res, @ResCb2, EVENTRES_BEFORE_UNLOAD, nil);
+
+  writeln('ResHndLoadSync   = ', ResHndLoadSync(res));
+  writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
+  writeln('  loaded obj = ', PtrUInt(p));
+  writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+  writeln('ResHndRelease    = ', ResHndRelease(res));
+  writeln('ResManRelease    = ', ResManRelease(man));
 end;
 
 begin
   //TestAllocation;
   //TestProvider;
-  TestLoad(true);
+  //TestLoad(true);
+  TestLoadCallback(true);
 end.
 
