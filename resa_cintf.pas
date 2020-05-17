@@ -272,10 +272,10 @@ const
   ResouceManagerLogToEvent : array [TResouceManagerLog] of LongWord = (
     EVENT_START_LOAD,      // noteStartLoading,
     EVENT_START_RELOAD,    // noteStartReloading,
-    EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
-    EVENT_W_ABNORMAL_LOAD, // warnAbnormalLoad, // function returned true, but no object was provided
     EVENT_LOAD_SUCCESS,    // noteLoadSuccess,
-    EVENT_UNLOADED_RES     // noteUnloadedResObj
+    EVENT_UNLOADED_RES,    // noteUnloadedResObj
+    EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
+    EVENT_W_ABNORMAL_LOAD  // warnAbnormalLoad, // function returned true, but no object was provided
   );
 
 procedure TResManHandle.ManLog(Sender: TResourceManager;
