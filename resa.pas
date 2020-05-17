@@ -17,6 +17,8 @@ type
   );
 
   TResourceHandler = class;
+  TResourceLoader = class;
+  TResourceManager = class;
 
   { TResourceObject }
 
@@ -25,15 +27,26 @@ type
   private
     RefCount : Integer;
     Handlers : TList;
-    Flags    : TResourceFlags;
     flock    : TRTLCriticalSection;
+    fRefName : string;
   public
-    constructor Create;
+    Flags      : TResourceFlags;
+    manager    : TResourceManager;
+    loadedWith : TResourceLoader;
+    loadObj    : TObject;
+    reloadedWith : TResourceLoader;
+    reloadObj  : TObject;
+
+    constructor Create(const ARefName: string);
     destructor Destroy; override;
     function AllocHandle: TResourceHandler;
     procedure ReleaseHandle(var AHnd: TResourceHandler);
     procedure Lock;
     procedure Unlock;
+    function GetFlags: TResourceFlags;
+    procedure AddFlags(fl: TResourceFlags);
+    procedure RemoveFlags(fl: TResourceFlags);
+    property RefName: string read fRefName; // readonly. no need to lock
   end;
 
   { TResourceHandler }
@@ -48,13 +61,30 @@ type
     procedure FreeInstance; override;
     property Owner: TResourceObject read fOwner;
 
-    function GetFlags: TResourceFlags;
-    procedure AddFlags(fl: TResourceFlags);
-    procedure RemoveFlags(fl: TResourceFlags);
+    procedure OwnerLock;
+    procedure OwnerUnlock;
   end;
 
-  TResourceTypeDef = class(TObject)
-  end;
+  TResourceProvider = class;
+
+  TLoadResult = (
+    lrSuccess,
+    lrLoaded,
+    lrAlreadyLoaded,
+    lrLoadScheduled,
+    lrErrNoPhysResource,
+    lrErrNoStream,
+    lrErrUnkResource,
+    lrErrFailToLoad
+  );
+
+  TResouceManagerLog = (
+    noteStartLoading,
+    noteStartReloading,
+    wantFailToLoad,
+    warnAbnormalLoad, // function returned true, but no object was provided
+    noteLoadSuccess
+  );
 
   { TResourceManager }
 
@@ -62,6 +92,13 @@ type
   private
     resList : THashedStringListEx;
     function GetResource(const refName: string; forced: Boolean): TResourceObject;
+
+    function FindLoader(p: TResourceProvider; const refName: string; out st: TStream;
+       out ld: TResourceLoader): TLoadResult;
+
+    function PerformLoad(p: TResourceProvider; res: TResourceObject; isReload: Boolean): TLoadResult;
+
+    procedure Log(const logMsg: TResouceManagerLog; const refName: string);
   public
     lock      : TRTLCriticalSection;
     maxMem    : QWord;
@@ -70,6 +107,8 @@ type
     destructor Destroy; override;
     function RegisterResource(const refName: string): TResourceObject;
     function ResourceExists(const refName: string): TResourceObject;
+
+    function LoadResourceSync(hnd: TResourceHandler): TLoadResult;
   end;
 
   TResourceProvider = class(TObject)
@@ -106,7 +145,17 @@ type
     function UnloadResource(const refName: string; var resObject: TObject): Boolean; override;
   end;
 
+function CheckNeedsLoad(hnd : TResourceHandler): Boolean;
+
 implementation
+
+uses
+  resa_providers, resa_loaders;
+
+function CheckNeedsLoad(hnd : TResourceHandler): Boolean;
+begin
+  Result := (hnd.Owner.GetFlags *[rfLoading, rfLoaded, rfReloading, rfReloaded]) = [];
+end;
 
 { TBufLoader }
 
@@ -183,34 +232,14 @@ begin
   inherited FreeInstance;
 end;
 
-function TResourceHandler.GetFlags: TResourceFlags;
+procedure TResourceHandler.OwnerLock;
 begin
-  Owner.Lock;
-  try
-    Result:=Owner.Flags;
-  finally
-    Owner.Unlock;;
-  end;
+  owner.Lock;
 end;
 
-procedure TResourceHandler.AddFlags(fl: TResourceFlags);
+procedure TResourceHandler.OwnerUnlock;
 begin
-  Owner.Lock;
-  try
-    Owner.Flags:=Owner.Flags+fl;
-  finally
-    Owner.Unlock;
-  end;
-end;
-
-procedure TResourceHandler.RemoveFlags(fl: TResourceFlags);
-begin
-  Owner.lock;
-  try
-    Owner.Flags:=Owner.Flags-fl;
-  finally
-    Owner.Unlock;
-  end;
+  Owner.Unlock;
 end;
 
 { TResourceManager }
@@ -225,10 +254,105 @@ begin
     Exit;
   end;
   if forced then begin
-    Result:=TResourceObject.Create;
+    Result:=TResourceObject.Create(refName);
     resList.AddObject(refName, Result);
   end else
     Result:=nil;
+end;
+
+function TResourceManager.FindLoader(p: TResourceProvider;
+  const refName: string; out st: TStream; out ld: TResourceLoader): TLoadResult;
+var
+  i : integer;
+  rld : TResourceLoader;
+begin
+  ld := nil;
+  st := p.AllocStream(refName);
+  if not Assigned(st) then begin
+    Result := lrErrNoStream;
+    Exit;
+  end;
+
+  for i:=0 to loaders.Count-1 do begin
+    rld := TResourceLoader(loaders[i]);
+
+    st.Position:=0;
+    if rld.CanLoad(refName, st) then begin
+      ld:=rld;
+      break;
+    end;
+  end;
+  if not Assigned(ld) then begin
+    Result := lrErrUnkResource;
+    Exit;
+  end;
+  Result := lrSuccess;
+end;
+
+function TResourceManager.PerformLoad(p: TResourceProvider;
+  res: TResourceObject; isReload: Boolean): TLoadResult;
+var
+  st : TStream;
+  ld : TResourceLoader;
+  sz : QWord;
+  obj : TObject;
+
+  loadingFlag : TResourceFlags;
+  loadedFlag  : TResourceFlags;
+  loadLog     : TResouceManagerLog;
+begin
+  Result := FindLoader(p, res.RefName, st, ld);
+  if Result<>lrSuccess then Exit;
+
+  if isReload then begin
+    loadedFlag := [rfReloaded];
+    loadingFlag := [rfReloading];
+    loadLog := noteStartReloading;
+  end else begin
+    loadedFlag := [rfLoaded];
+    loadingFlag := [rfLoading];
+    loadLog := noteStartLoading;
+  end;
+
+  res.AddFlags(loadingFlag);
+  try
+    Log(loadLog, res.RefName);
+
+    if not ld.LoadResource(res.RefName, st, sz, obj) then begin
+      Log(wantFailToLoad, res.RefName);
+      Result:=lrErrFailToLoad;
+      Exit;
+    end;
+    if not Assigned(obj) then begin
+      Log(warnAbnormalLoad, res.RefName);
+      Result:=lrErrFailToLoad;
+      Exit;
+    end;
+
+    res.Lock;
+    try
+      if isReload then begin
+        res.reloadedWith := ld;
+        res.reloadObj := obj;
+      end else begin
+        res.loadedWith := ld;
+        res.loadObj := obj;
+      end;
+      res.AddFlags(loadedFlag);
+      Log(noteLoadSuccess, res.RefName);
+
+    finally
+      res.Unlock;
+    end;
+  finally
+    res.RemoveFlags(loadingFlag);
+  end;
+end;
+
+procedure TResourceManager.Log(const logMsg: TResouceManagerLog;
+  const refName: string);
+begin
+
 end;
 
 constructor TResourceManager.Create;
@@ -271,13 +395,67 @@ begin
   end;
 end;
 
+
+function TResourceManager.LoadResourceSync(hnd: TResourceHandler): TLoadResult;
+var
+  p : TResourceProvider;
+begin
+  hnd.OwnerLock;
+  try
+    if not CheckNeedsLoad(hnd) then begin
+      Result:=lrAlreadyLoaded;
+      Exit;
+    end;
+    FindResource(hnd.Owner.RefName, p);
+    if p = nil then begin
+      Result:=lrErrNoPhysResource;
+      Exit;
+    end;
+
+    Result := PerformLoad(p, hnd.Owner, false);
+  finally
+    hnd.OwnerUnlock;
+  end;
+end;
+
 { TResourceObject }
 
-constructor TResourceObject.Create;
+function TResourceObject.GetFlags: TResourceFlags;
+begin
+  Lock;
+  try
+    Result:=Flags;
+  finally
+    Unlock;
+  end;
+end;
+
+procedure TResourceObject.AddFlags(fl: TResourceFlags);
+begin
+  Lock;
+  try
+    Flags:=Flags+fl;
+  finally
+    Unlock;
+  end;
+end;
+
+procedure TResourceObject.RemoveFlags(fl: TResourceFlags);
+begin
+  lock;
+  try
+    Flags:=Flags-fl;
+  finally
+    Unlock;
+  end;
+end;
+
+constructor TResourceObject.Create(const ARefName: string);
 begin
   inherited Create;
   InitCriticalSection(flock);
   Handlers := TList.Create;
+  fRefName := ARefName;
 end;
 
 destructor TResourceObject.Destroy;

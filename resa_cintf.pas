@@ -5,7 +5,7 @@ unit resa_cintf;
 interface
 
 uses
-  resa, resa_filesys, resa_providers, classes, sysutils;
+  resa, resa_filesys, resa_providers, classes, sysutils, resa_loaders;
 
 type
   TResManagerHandle = PtrUInt;
@@ -18,15 +18,17 @@ function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var r
 function ResHndRelease(var res: TResHandle): TResError; cdecl;
 function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl;
 function ResHndSetFixed(res: TResHandle; isFixed: LongBool): TResError; cdecl;
+function ResHndLoadSync(ahnd: TResHandle): TResError;  cdecl;
 
-function ResSourceAddDir(const dir: PUnicodeChar): Boolean;
-function ResExists(const arefName: PUnicodeChar): Boolean;
+function ResSourceAddDir(const dir: PUnicodeChar): Boolean; cdecl;
+function ResExists(const arefName: PUnicodeChar): Boolean; cdecl;
 
 const
   RES_NO_ERROR   = 0;
   RES_SUCCESS    = RES_NO_ERROR;
   RES_INV_PARAMS = -1;
   RES_INT_ERROR  = -100;
+  RES_NO_RESOURCE = -2;
 
 implementation
 
@@ -113,7 +115,7 @@ var
 begin
   if not ResHndSanityCheck(res, Result) then Exit;
   hnd := TResourceHandler(res);
-  isFixed := rfFixed in hnd.GetFlags;
+  isFixed := rfFixed in hnd.Owner.GetFlags;
 end;
 
 function ResHndSetFixed(res: TResHandle; isFixed:LongBool): TResError; cdecl;
@@ -122,10 +124,10 @@ var
 begin
   if not ResHndSanityCheck(res, Result) then Exit;
   hnd := TResourceHandler(res);
-  hnd.AddFlags([rfFixed]);
+  hnd.Owner.AddFlags([rfFixed]);
 end;
 
-function ResSourceAddDir(const dir: PUnicodeChar): Boolean;
+function ResSourceAddDir(const dir: PUnicodeChar): Boolean; cdecl;
 var
   pth : UnicodeString;
   i   : integer;
@@ -153,7 +155,7 @@ begin
   RegisterProvider( TFileResourceProvider.Create(pth, cmp));
 end;
 
-function ResExists(const arefName: PUnicodeChar): Boolean;
+function ResExists(const arefName: PUnicodeChar): Boolean; cdecl;
 var
   refName : string;
   p : TResourceProvider;
@@ -163,6 +165,24 @@ begin
 
   refName := GetResName(arefName);
   Result := FindResource(refName, p);
+end;
+
+function LoadErrorToResult(err: TLoadResult): TResError;
+begin
+  //todo:
+  Result:=RES_INV_PARAMS;
+end;
+
+function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
+var
+  hnd : TResourceHandler;
+  p   : TResourceProvider;
+  res : TLoadResult;
+begin
+  if not ResHndSanityCheck(ahnd, Result) then Exit;
+  hnd := TResourceHandler(ahnd);
+  res := hnd.Owner.manager.LoadResourceSync(hnd);
+  Result := LoadErrorToResult(res);
 end;
 
 end.
