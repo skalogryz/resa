@@ -26,12 +26,14 @@ type
     RefCount : Integer;
     Handlers : TList;
     Flags    : TResourceFlags;
+    flock    : TRTLCriticalSection;
   public
-    lock : TRTLCriticalSection;
     constructor Create;
     destructor Destroy; override;
     function AllocHandle: TResourceHandler;
     procedure ReleaseHandle(var AHnd: TResourceHandler);
+    procedure Lock;
+    procedure Unlock;
   end;
 
   { TResourceHandler }
@@ -70,7 +72,47 @@ type
     function ResourceExists(const refName: string): TResourceObject;
   end;
 
+  TResourceProvider = class(TObject)
+    function Exists(const refName: string): Boolean; virtual; abstract;
+    function AllocStream(const refName: string): TStream; virtual; abstract;
+    procedure StreamDone(str: TStream); virtual; abstract;
+  end;
+
+  TResourceLoader = class(TObject)
+  public
+    procedure LoadResource(
+      const refName: string; stream: TStream;
+      out Size: QWord; out resObject: Pointer
+    ); virtual; abstract;
+    procedure UnloadResource(const refName: string; resObject: Pointer);
+      virtual; abstract;
+  end;
+
+  { TBufLoader }
+
+  TBufLoader = class(TResourceLoader)
+    procedure LoadResource(
+      const refName: string; stream: TStream;
+      out Size: QWord; out resObject: Pointer
+    ); override;
+    procedure UnloadResource(const refName: string; resObject: Pointer); override;
+  end;
+
 implementation
+
+{ TBufLoader }
+
+procedure TBufLoader.LoadResource(const refName: string; stream: TStream; out
+  Size: QWord; out resObject: Pointer);
+begin
+  resObject := AllocMem(stream.Size);
+  Size := stream.Read(resObject, stream.size);
+end;
+
+procedure TBufLoader.UnloadResource(const refName: string; resObject: Pointer);
+begin
+  Freemem(resObject);
+end;
 
 { TResourceHandler }
 
@@ -95,31 +137,31 @@ end;
 
 function TResourceHandler.GetFlags: TResourceFlags;
 begin
-  EnterCriticalsection(Owner.lock);
+  Owner.Lock;
   try
     Result:=Owner.Flags;
   finally
-    LeaveCriticalsection(Owner.lock);
+    Owner.Unlock;;
   end;
 end;
 
 procedure TResourceHandler.AddFlags(fl: TResourceFlags);
 begin
-  EnterCriticalsection(Owner.lock);
+  Owner.Lock;
   try
     Owner.Flags:=Owner.Flags+fl;
   finally
-    LeaveCriticalsection(Owner.lock);
+    Owner.Unlock;
   end;
 end;
 
 procedure TResourceHandler.RemoveFlags(fl: TResourceFlags);
 begin
-  EnterCriticalsection(Owner.lock);
+  Owner.lock;
   try
     Owner.Flags:=Owner.Flags-fl;
   finally
-    LeaveCriticalsection(Owner.lock);
+    Owner.Unlock;
   end;
 end;
 
@@ -186,33 +228,33 @@ end;
 constructor TResourceObject.Create;
 begin
   inherited Create;
-  InitCriticalSection(lock);
+  InitCriticalSection(flock);
   Handlers := TList.Create;
 end;
 
 destructor TResourceObject.Destroy;
 begin
-  DoneCriticalsection(lock);
+  DoneCriticalsection(flock);
   Handlers.free;
   inherited Destroy;
 end;
 
 function TResourceObject.AllocHandle: TResourceHandler;
 begin
-  EnterCriticalsection(lock);
+  Lock;
   try
     Result:=TResourceHandler.Create(Self);
     inc(RefCount);
     Handlers.Add(Result);
   finally
-    LeaveCriticalsection(lock);
+    Unlock;
   end;
 end;
 
 procedure TResourceObject.ReleaseHandle(var AHnd: TResourceHandler);
 begin
   if not Assigned(AHnd) then Exit;
-  EnterCriticalsection(lock);
+  Lock;
   try
     if AHnd.fOwner<>self then Exit;
     Handlers.Remove(AHnd);
@@ -220,8 +262,18 @@ begin
     AHnd.fOwner:=nil; // must nil-out the owner first!
     AHnd.Free;
   finally
-    LeaveCriticalsection(lock);
+    Unlock;
   end;
+end;
+
+procedure TResourceObject.Lock;
+begin
+  EnterCriticalsection(flock);
+end;
+
+procedure TResourceObject.Unlock;
+begin
+  LeaveCriticalsection(flock);
 end;
 
 end.
