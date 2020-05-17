@@ -98,8 +98,12 @@ type
 
     function PerformLoad(p: TResourceProvider; res: TResourceObject; isReload: Boolean): TLoadResult;
 
-    procedure Log(const logMsg: TResouceManagerLog; const refName: string);
+    procedure Log(const logMsg: TResouceManagerLog; const refName: string; param1: Int64 = 0; param2: Int64 = 0);
   public
+    LogProc   : procedure (Sender: TResourceManager;
+                  const logMsg: TResouceManagerLog;
+                  const refName: string;
+                  param1: Int64 = 0; param2: Int64 = 0) of object;
     lock      : TRTLCriticalSection;
     maxMem    : QWord;
     maxThread : LongWord;
@@ -339,20 +343,24 @@ begin
         res.loadObj := obj;
       end;
       res.AddFlags(loadedFlag);
-      Log(noteLoadSuccess, res.RefName);
-
     finally
       res.Unlock;
     end;
+    Log(noteLoadSuccess, res.RefName);
+    Result := lrLoaded;
   finally
     res.RemoveFlags(loadingFlag);
   end;
 end;
 
 procedure TResourceManager.Log(const logMsg: TResouceManagerLog;
-  const refName: string);
+  const refName: string; param1: Int64 = 0; param2: Int64 = 0);
 begin
-
+  try
+    if Assigned(LogProc) then
+      LogProc(Self, logMsg, refName, param1, param2);
+  except
+  end;
 end;
 
 constructor TResourceManager.Create;
