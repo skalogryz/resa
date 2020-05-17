@@ -36,7 +36,10 @@ begin
   pl := TList.Create;
   try
     Result := FindResource(refName, pl);
-    if Result then p := TResourceProvider(pl[0]);
+    if Result then
+      p := TResourceProvider(pl[0])
+    else
+      p := nil;
   finally
     pl.Free;
   end;
