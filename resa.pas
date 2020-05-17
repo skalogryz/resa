@@ -433,6 +433,7 @@ function TResourceManager.UnloadResourceSync(res: TResourceObject; isReloadObj: 
 var
   idx : integer;
   cnFlag : TResourceFlags;
+  clrFlag : TResourceFlags;
 begin
   if not Assigned(res) then begin
     Result:=false;
@@ -444,9 +445,11 @@ begin
     if isReloadObj then begin
       idx := IDX_RELOAD;
       cnFlag := [rfReloadingCancel];
+      clrFlag := [rfReloaded];
     end else begin
       idx := IDX_LOAD;
       cnFlag := [rfLoadingCancel];
+      clrFlag := [rfLoaded];
     end;
 
     if not Assigned(res.resObj[idx].obj) then begin
@@ -455,6 +458,7 @@ begin
     end else if Assigned(res.ResObj[idx].obj) and Assigned(res.ResObj[idx].loader) then begin
       UnloadResObj(res.RefName, res.ResObj[idx].obj, res.ResObj[idx].loader, isReloadObj);
       res.ClearLoad(idx);
+      res.Flags := res.Flags - clrFlag;
       Result := true;
     end else
       Result := false;
