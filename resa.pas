@@ -42,6 +42,7 @@ type
   public
     Flags      : TResourceFlags;
     resObj     : array [0..1] of TResObjectInfo;
+    Tags       : TList; // the list of owner TObjects
 
     constructor Create(const ARefName: string; AManager: TResourceManager);
     destructor Destroy; override;
@@ -92,6 +93,7 @@ type
     noteStartLoading,
     noteStartReloading,
     noteLoadSuccess,
+    noteUnloadingResObj,
     noteUnloadedResObj,
     noteLoadCancel,
     wantFailToLoad,
@@ -350,6 +352,7 @@ var
   paramUnload : array [Boolean] of Int64 = (IDX_LOAD, IDX_RELOAD);
 begin
   if ASsigned(loadedWith) and Assigned(obj) then begin
+    Log(noteUnloadingResObj, refName, paramUnload[isReloadObj]);
     loadedWith.UnloadResource(refName, obj);
     Log(noteUnloadedResObj, refName, paramUnload[isReloadObj]);
   end;
@@ -542,6 +545,7 @@ end;
 constructor TResourceObject.Create(const ARefName: string; AManager: TResourceManager);
 begin
   inherited Create;
+  Tags:=TList.Create;
   InitCriticalSection(flock);
   Handlers := TList.Create;
   fRefName := ARefName;
@@ -549,7 +553,12 @@ begin
 end;
 
 destructor TResourceObject.Destroy;
+var
+  i : integer;
 begin
+  for i:=0 to Tags.Count-1 do
+    TObject(Tags[i]).Free;
+  Tags.Free;
   DoneCriticalsection(flock);
   Handlers.free;
   UnloadAll;

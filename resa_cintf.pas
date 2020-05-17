@@ -19,6 +19,14 @@ type
     UserData: Pointer
   ); cdecl;
 
+  TResHndCallback = procedure (
+    man   : TResManagerHandle;
+    event : LongWord;
+    const resRef: PChar;
+    const param1, param2: Int64;
+    userData: Pointer
+  ); cdecl;
+
 function ResManAlloc(out man: TResManagerHandle): TResError; cdecl;
 function ResManRelease(var man: TResManagerHandle): TResError; cdecl;
 function ResManSetCallback(man: TResManagerHandle; logproc: TResManCallBack; userData: Pointer): TResError; cdecl;
@@ -30,6 +38,13 @@ function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndReloadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndGetObj(res: TResHandle; var resource: Pointer; var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
 function ResHndUnloadSync(ahnd: TResHandle; unloadReloadObj: Integer): TResError; cdecl;
+
+const
+  EVENTRES_AFTER_LOAD    = $02;
+  EVENTRES_BEFORE_UNLOAD = $08;
+
+function ResHndAddCallback(res: TResHandle; callback: TResHndCallback; resourceEvents: Integer; userData: Pointer): TResError; cdecl;
+function ResHndRemoveCallback(res: TResHandle; callback: TResHndCallback; userData: Pointer): TResError; cdecl;
 
 function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
 function ResExists(const arefName: PUnicodeChar): TResError; cdecl;
@@ -56,6 +71,7 @@ const
   EVENT_LOAD_SUCCESS    = 12;
   EVENT_UNLOADED_RES    = 13;
   EVENT_LOAD_CANCEL     = 14;
+  EVENT_UNLOAD_START    = 15;
   EVENT_W_FAIL_TOLOAD   = 1000;
   EVENT_W_ABNORMAL_LOAD = 1001;
 
@@ -107,6 +123,7 @@ type
   { TResManHandle }
 
   TResManHandle = class(TObject)
+  public
     manager    : TResourceManager;
     logCallback: TResManCallBack;
     logUserData: Pointer;
@@ -118,6 +135,13 @@ type
     destructor Destroy; override;
   end;
 
+  TResCallback = class(TObject)
+    userData : Pointer;
+    proc     : TResHndCallback;
+    event    : Integer;
+    constructor Create(acb: TResHndCallback; auserData: Pointer);
+    function isMatch(acb: TResHndCallback; auserData: Pointer): Boolean;
+  end;
 
 function GetResName(const nm: PUnicodeChar): string;
 var
@@ -173,10 +197,6 @@ begin
   //todo: need a lock here
   h.logCallback:=logproc;
   h.logUserData:=userData;
-  if Assigned(logproc) then
-    h.manager.LogProc := h.ManLog
-  else
-    h.manager.LogProc := nil;
 end;
 
 function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var res: TResHandle): TResError; cdecl;
@@ -207,7 +227,10 @@ end;
 
 function ResHndRelease(var res: TResHandle): TResError; cdecl;
 var
-  h : TResourceHandler;
+  h  : TResourceHandler;
+  i  : integer;
+  cb : TResCallback;
+  any : boolean;
 begin
   if not ResHndSanityCheck(res, Result) then Exit;
   try
@@ -236,6 +259,78 @@ begin
   if not ResHndSanityCheck(res, Result) then Exit;
   hnd := TResourceHandler(res);
   hnd.Owner.AddFlags([rfFixed]);
+end;
+
+constructor TResCallback.Create(acb: TResHndCallback; auserData: Pointer);
+begin
+  inherited Create;
+  proc := acb;
+  userData := auserData;
+end;
+
+function TResCallback.isMatch(acb: TResHndCallback; auserData: Pointer): Boolean;
+begin
+  Result:=(@acb = @proc) and (auserData = userData);
+end;
+
+function ResHndAddCallback(res: TResHandle; callback: TResHndCallback;
+  resourceEvents: Integer; userData: Pointer): TResError; cdecl;
+var
+  hnd : TResourceHandler;
+  obj : TObject;
+  i   : Integer;
+  cb  : TResCallback;
+begin
+  if not ResHndSanityCheck(res, Result) then Exit;
+  hnd := TResourceHandler(res);
+
+  hnd.OwnerLock;
+  try
+    for i:=0 to hnd.Owner.Tags.Count-1 do begin
+      obj:=hnd.Owner.Tags[i];
+      if not (obj is TResCallback) then continue;
+      if TResCallback(obj).isMatch(callback, userData) then begin
+        TResCallback(obj).event:=TResCallback(obj).event or resourceEvents;
+        Result := RES_SUCCESS;
+        Exit;
+      end;
+    end;
+    cb := TResCallback.Create(callback, userData);
+    cb.event := resourceEvents;
+    hnd.Owner.Tags.Add (cb);
+    Result := RES_SUCCESS;
+  finally
+    hnd.OwnerUnlock;
+  end;
+end;
+
+function ResHndRemoveCallback(res: TResHandle; callback: TResHndCallback;
+  userData: Pointer): TResError; cdecl;
+var
+  hnd : TResourceHandler;
+  i   : integer;
+  obj : TObject;
+  any : boolean;
+begin
+  if not ResHndSanityCheck(res, Result) then Exit;
+  hnd := TResourceHandler(res);
+  hnd.OwnerLock;
+  try
+    any:=false;
+    for i:=0 to hnd.Owner.Tags.Count-1 do begin
+      obj:=hnd.Owner.Tags[i];
+      if not (obj is TResCallback) then continue;
+      if TResCallback(obj).isMatch(callback, userData) then begin
+        any:=true;
+        obj.Free;
+        hnd.Owner.Tags[i]:=nil;
+      end;
+    end;
+    if any then
+      hnd.Owner.Tags.Pack;
+  finally
+    hnd.OwnerUnlock;
+  end;
 end;
 
 function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
@@ -381,12 +476,12 @@ end;
 
 { TResManHandle }
 
-
 const
   ResouceManagerLogToEvent : array [TResouceManagerLog] of LongWord = (
     EVENT_START_LOAD,      // noteStartLoading,
     EVENT_START_RELOAD,    // noteStartReloading,
     EVENT_LOAD_SUCCESS,    // noteLoadSuccess,
+    EVENT_UNLOAD_START,    // noteUnloadingResObj
     EVENT_UNLOADED_RES,    // noteUnloadedResObj
     EVENT_LOAD_CANCEL,     // noteLoadCancel
     EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
@@ -394,23 +489,54 @@ const
   );
 
 procedure TResManHandle.ManLog(Sender: TResourceManager;
-  const logMsg: TResouceManagerLog; const refName: string; param1: Int64;
+  const logMsg: TResouceManagerLog;
+  const refName: string; param1: Int64;
   param2: Int64);
+var
+  EV : integer;
+  ro : TResourceObject;
+  obj : TObject;
+  i   : integer;
+  clb : TResCallback;
 begin
-  if not Assigned(logCallback) then Exit;
-  logCallback(
-    TResManagerHandle(Self),
-    ResouceManagerLogToEvent[logMsg],
-    PChar(refName),
-    param1, param2,
-    logUserData
-  );
+  if Assigned(logCallback) then begin
+    logCallback(
+      TResManagerHandle(Self),
+      ResouceManagerLogToEvent[logMsg],
+      PChar(refName),
+      param1, param2,
+      logUserData
+    );
+  end;
+
+  if logMsg = noteLoadSuccess then EV := EVENTRES_AFTER_LOAD
+  else if logMsg = noteUnloadingResObj then EV := EVENTRES_BEFORE_UNLOAD
+  else EV := 0;
+  if EV = 0 then Exit;
+
+  ro := manager.ResourceExists(refName);
+  if not Assigned(ro) then Exit;
+
+  for i:=0 to ro.Tags.Count-1 do begin
+    obj := TObject(ro.tags[i]);
+    if not (obj is TResCallback) then Continue;
+    clb := TResCallback(obj);
+    if Assigned(clb.proc) and ((clb.event and EV)>0) then
+      clb.proc(
+        TResManagerHandle(Self),
+        ResouceManagerLogToEvent[logMsg],
+        PChar(refName),
+        param1, param2, clb.userData
+      );
+  end;
+
 end;
 
 constructor TResManHandle.Create;
 begin
   inherited Create;
   manager := TResourceManager.Create;
+  manager.LogProc := ManLog;
 end;
 
 destructor TResManHandle.Destroy;
