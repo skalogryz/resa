@@ -25,6 +25,7 @@ type
   TResObjectInfo = record
     obj    : TObject;
     loader : TResourceLoader;
+    size   : Int64;
   end;
 
   { TResourceObject }
@@ -335,6 +336,7 @@ begin
           idx := ReloadIdx[isReload];
           res.resObj[idx].obj := obj;
           res.resObj[idx].loader := ld;
+          res.resObj[idx].size := sz;
           res.AddFlags(loadedFlag);
         finally
           res.Unlock;
