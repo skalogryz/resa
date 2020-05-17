@@ -10,8 +10,10 @@ uses
 type
   TResourceFlags = set of (
     rfLoading,    // loading in progress
+    rfLoadingCancel, // loading is in progress, but should be discarded on completion (due to Unloadcalls)
     rfLoaded,     // loaded
     rfReloading,  // is reloading
+    rfReloadingCancel, // reloading is in progress, but should be discarded on completion (due to Unloadcalls)
     rfReloaded,   // reloaded version is ready
     rfFixed       // cannot be unloaded
   );
@@ -36,7 +38,7 @@ type
     fRefName : string;
     fManager : TResourceManager;
     procedure UnloadAll;
-    procedure UnloadInfo(var inf: TResObjectInfo);
+    procedure UnloadInfo(var inf: TResObjectInfo; isReloadObj: Boolean);
   public
     Flags      : TResourceFlags;
     resObj     : array [0..1] of TResObjectInfo;
@@ -51,6 +53,7 @@ type
     procedure AddFlags(fl: TResourceFlags);
     procedure RemoveFlags(fl: TResourceFlags);
     function SwapLoads: Boolean;
+    procedure ClearLoad(i: integer);
     property RefName: string read fRefName; // readonly. no need to lock
     property Manager: TResourceManager read fManager;
   end;
@@ -78,6 +81,7 @@ type
     lrLoaded,
     lrAlreadyLoaded,
     lrLoadScheduled,
+    lrLoadCancelled,
     lrErrNoPhysResource,
     lrErrNoStream,
     lrErrUnkResource,
@@ -89,6 +93,7 @@ type
     noteStartReloading,
     noteLoadSuccess,
     noteUnloadedResObj,
+    noteLoadCancel,
     wantFailToLoad,
     warnAbnormalLoad  // function returned true, but no object was provided
   );
@@ -106,7 +111,7 @@ type
     function PerformLoad(p: TResourceProvider; res: TResourceObject; isReload: Boolean): TLoadResult;
 
     procedure Log(const logMsg: TResouceManagerLog; const refName: string; param1: Int64 = 0; param2: Int64 = 0);
-    procedure UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader);
+    procedure UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader; isReloadObj: Boolean);
   public
     LogProc   : procedure (Sender: TResourceManager;
                   const logMsg: TResouceManagerLog;
@@ -121,6 +126,7 @@ type
     function ResourceExists(const refName: string): TResourceObject;
 
     function LoadResourceSync(res: TResourceObject; Reload: Boolean): TLoadResult;
+    function UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
   end;
 
   TResourceProvider = class(TObject)
@@ -263,9 +269,11 @@ var
   ld : TResourceLoader;
   sz : QWord;
   obj : TObject;
+  idx : Integer;
 
   loadingFlag : TResourceFlags;
   loadedFlag  : TResourceFlags;
+  cancelFlag  : TResourceFlags;
   loadLog     : TResouceManagerLog;
 const
   ReloadIdx : array [boolean] of integer = (IDX_LOAD, IDX_RELOAD);
@@ -277,37 +285,47 @@ begin
       loadedFlag := [rfReloaded];
       loadingFlag := [rfReloading];
       loadLog := noteStartReloading;
+      cancelFlag := [rfReloadingCancel];
     end else begin
       loadedFlag := [rfLoaded];
       loadingFlag := [rfLoading];
       loadLog := noteStartLoading;
+      cancelFlag := [rfLoadingCancel];
     end;
+    idx := ReloadIdx[isReload];
 
     res.AddFlags(loadingFlag);
     try
-      Log(loadLog, res.RefName);
+      Log(loadLog, res.RefName, idx);
 
       if not ld.LoadResource(res.RefName, st, sz, obj) then begin
-        Log(wantFailToLoad, res.RefName);
+        Log(wantFailToLoad, res.RefName, idx);
         Result:=lrErrFailToLoad;
         Exit;
       end;
       if not Assigned(obj) then begin
-        Log(warnAbnormalLoad, res.RefName);
+        Log(warnAbnormalLoad, res.RefName, idx);
         Result:=lrErrFailToLoad;
         Exit;
       end;
 
-      res.Lock;
-      try
-        res.resObj[ReloadIdx[isReload]].obj := obj;
-        res.resObj[ReloadIdx[isReload]].loader := ld;
-        res.AddFlags(loadedFlag);
-      finally
-        res.Unlock;
+      if res.GetFlags * cancelFlag <> [] then begin
+        ld.UnloadResource(res.refName, obj);
+        Log(noteLoadCancel, res.RefName, idx);
+        Result := lrLoadCancelled;
+      end else begin
+        res.Lock;
+        try
+          idx := ReloadIdx[isReload];
+          res.resObj[idx].obj := obj;
+          res.resObj[idx].loader := ld;
+          res.AddFlags(loadedFlag);
+        finally
+          res.Unlock;
+        end;
+        Log(noteLoadSuccess, res.RefName, idx);
+        Result := lrLoaded;
       end;
-      Log(noteLoadSuccess, res.RefName);
-      Result := lrLoaded;
     finally
       res.RemoveFlags(loadingFlag);
     end;
@@ -327,11 +345,13 @@ begin
   end;
 end;
 
-procedure TResourceManager.UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader);
+procedure TResourceManager.UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader; isReloadObj: Boolean);
+var
+  paramUnload : array [Boolean] of Int64 = (IDX_LOAD, IDX_RELOAD);
 begin
   if ASsigned(loadedWith) and Assigned(obj) then begin
     loadedWith.UnloadResource(refName, obj);
-    Log(noteUnloadedResObj, refName);
+    Log(noteUnloadedResObj, refName, paramUnload[isReloadObj]);
   end;
 end;
 
@@ -409,6 +429,41 @@ begin
   Result := PerformLoad(p, res, Reload);
 end;
 
+function TResourceManager.UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
+var
+  idx : integer;
+  cnFlag : TResourceFlags;
+begin
+  if not Assigned(res) then begin
+    Result:=false;
+    Exit;
+  end;
+
+  res.Lock;
+  try
+    if isReloadObj then begin
+      idx := IDX_RELOAD;
+      cnFlag := [rfReloadingCancel];
+    end else begin
+      idx := IDX_LOAD;
+      cnFlag := [rfLoadingCancel];
+    end;
+
+    if not Assigned(res.resObj[idx].obj) then begin
+      res.Flags := res.Flags + cnFlag;
+      Result := true;
+    end else if Assigned(res.ResObj[idx].obj) and Assigned(res.ResObj[idx].loader) then begin
+      UnloadResObj(res.RefName, res.ResObj[idx].obj, res.ResObj[idx].loader, isReloadObj);
+      res.ClearLoad(idx);
+      Result := true;
+    end else
+      Result := false;
+  finally
+    res.Unlock;
+  end;
+
+end;
+
 { TResourceObject }
 
 function TResourceObject.GetFlags: TResourceFlags;
@@ -458,16 +513,23 @@ begin
   end;
 end;
 
-procedure TResourceObject.UnloadAll;
+procedure TResourceObject.ClearLoad(i: integer);
 begin
-  UnloadInfo(resObj[0]);
-  UnloadInfo(resObj[1]);
+  if (i<0) or (i>=length(resObj)) then Exit;
+  resObj[i].obj:=nil;
+  resObj[i].loader:=nil;
 end;
 
-procedure TResourceObject.UnloadInfo(var inf: TResObjectInfo);
+procedure TResourceObject.UnloadAll;
+begin
+  UnloadInfo(resObj[0], false);
+  UnloadInfo(resObj[1], true);
+end;
+
+procedure TResourceObject.UnloadInfo(var inf: TResObjectInfo; isReloadObj: Boolean);
 begin
   if Assigned(inf.obj) and Assigned(inf.loader) then begin
-    manager.UnloadResObj(refName, inf.obj, inf.loader);
+    manager.UnloadResObj(refName, inf.obj, inf.loader, isReloadObj);
     inf.obj := nil;
     inf.loader := nil;
   end;

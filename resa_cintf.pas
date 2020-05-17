@@ -29,6 +29,7 @@ function ResHndSetFixed(res: TResHandle; isFixed: LongBool): TResError; cdecl;
 function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndReloadSync(ahnd: TResHandle): TResError; cdecl;
 function ResHndGetObj(res: TResHandle; var resource: Pointer; var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
+function ResHndUnloadSync(ahnd: TResHandle; unloadReloadObj: Integer): TResError; cdecl;
 
 function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
 function ResExists(const arefName: PUnicodeChar): TResError; cdecl;
@@ -44,6 +45,7 @@ const
   RES_UNK_FILE      = -4;    // the resource file doesn't have a loader that can load it
   RES_FAIL_LOAD     = -5;    // the resource file was not loaded, due to some problems with the loader
   RES_NOT_LOADED    = -6;    // the resource has not been loaded yet
+  RES_CANCEL_LOAD   = -7;    // the resource loading was cancelled by the user
   RES_INVALID_FMT   = -101;  // the resource was loaded, but the internal format is not recognizable. (internal error)
   RES_NO_SOURCES    = -300;  // no sources were registered
   RES_NO_SOURCEROOT = -301;  // the specified directory cannot be found for directory source
@@ -53,6 +55,7 @@ const
   EVENT_START_RELOAD    = 11;
   EVENT_LOAD_SUCCESS    = 12;
   EVENT_UNLOADED_RES    = 13;
+  EVENT_LOAD_CANCEL     = 14;
   EVENT_W_FAIL_TOLOAD   = 1000;
   EVENT_W_ABNORMAL_LOAD = 1001;
 
@@ -292,6 +295,7 @@ const
    RES_SUCCESS,     // lrLoaded,
    RES_SUCCESS,     // lrAlreadyLoaded,
    RES_SCHEDULED,   // lrLoadScheduled,
+   RES_CANCEL_LOAD, // lrLoadCancelled,
    RES_NO_RESOURCE, // lrErrNoPhysResource,
    RES_NO_FILE,     // lrErrNoStream,
    RES_UNK_FILE,    // lrErrUnkResource,
@@ -362,6 +366,19 @@ begin
   end;
 end;
 
+function ResHndUnloadSync(ahnd: TResHandle; unloadReloadObj: Integer): TResError; cdecl;
+var
+  hnd : TResourceHandler;
+begin
+  if not ResHndSanityCheck(ahnd, Result) then Exit;
+  hnd := TResourceHandler(ahnd);
+
+  if hnd.Owner.manager.UnloadResourceSync(hnd.Owner, false) then
+    Result := RES_SUCCESS
+  else
+    Result := RES_NOT_LOADED;
+end;
+
 { TResManHandle }
 
 
@@ -371,6 +388,7 @@ const
     EVENT_START_RELOAD,    // noteStartReloading,
     EVENT_LOAD_SUCCESS,    // noteLoadSuccess,
     EVENT_UNLOADED_RES,    // noteUnloadedResObj
+    EVENT_LOAD_CANCEL,     // noteLoadCancel
     EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
     EVENT_W_ABNORMAL_LOAD  // warnAbnormalLoad, // function returned true, but no object was provided
   );
