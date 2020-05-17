@@ -78,40 +78,88 @@ type
     procedure StreamDone(str: TStream); virtual; abstract;
   end;
 
+  { TResourceLoader }
+
   TResourceLoader = class(TObject)
   public
-    procedure LoadResource(
+    function CanLoad(const refName: string; stream: TStream): Boolean;
+      virtual; abstract;
+    function EstimateMem(const refName: string; stream: TStream; var ExpectedMem: QWord): Boolean;
+      virtual;
+    function LoadResource(
       const refName: string; stream: TStream;
-      out Size: QWord; out resObject: Pointer
-    ); virtual; abstract;
-    procedure UnloadResource(const refName: string; resObject: Pointer);
+      out Size: QWord; out resObject: TObject
+    ): Boolean; virtual; abstract;
+    function UnloadResource(const refName: string; var resObject: TObject): Boolean;
       virtual; abstract;
   end;
 
   { TBufLoader }
 
   TBufLoader = class(TResourceLoader)
-    procedure LoadResource(
+    function CanLoad(const refName: string; stream: TStream): Boolean; override;
+    function EstimateMem(const refName: string; stream: TStream; var ExpectedMem: QWord): Boolean; override;
+    function LoadResource(
       const refName: string; stream: TStream;
-      out Size: QWord; out resObject: Pointer
-    ); override;
-    procedure UnloadResource(const refName: string; resObject: Pointer); override;
+      out Size: QWord; out resObject: TObject
+    ): Boolean; override;
+    function UnloadResource(const refName: string; var resObject: TObject): Boolean; override;
   end;
 
 implementation
 
 { TBufLoader }
 
-procedure TBufLoader.LoadResource(const refName: string; stream: TStream; out
-  Size: QWord; out resObject: Pointer);
+type
+
+  { TMemBuf }
+
+  TMemBuf = class(TObject)
+    mem : Pointer;
+  end;
+
+{ TResourceLoader }
+
+function TResourceLoader.EstimateMem(const refName: string; stream: TStream;
+  var ExpectedMem: QWord): Boolean;
 begin
-  resObject := AllocMem(stream.Size);
-  Size := stream.Read(resObject, stream.size);
+  Result:=false;
 end;
 
-procedure TBufLoader.UnloadResource(const refName: string; resObject: Pointer);
+{ TResourceLoader }
+
+function TBufLoader.CanLoad(const refName: string; stream: TStream): Boolean;
 begin
-  Freemem(resObject);
+  Result := true; // yeah... anything can be pushed to RAM!
+end;
+
+function TBufLoader.EstimateMem(const refName: string; stream: TStream;
+  var ExpectedMem: QWord): Boolean;
+begin
+  ExpectedMem := stream.Size;
+  Result := true;
+end;
+
+function TBufLoader.LoadResource(const refName: string; stream: TStream; out
+  Size: QWord; out resObject: TObject): Boolean;
+var
+  buf : TMemBuf;
+begin
+  buf := TMemBuf.Create;
+  buf.mem := AllocMem(stream.Size);
+  Size := stream.Read(buf.mem^, stream.size);
+  resObject := buf;
+  Result := true;
+end;
+
+function TBufLoader.UnloadResource(const refName: string; var resObject: TObject): Boolean;
+begin
+  Result := resObject is TMemBuf;
+  if not Result then Exit;
+  FreeMem(TMemBuf(resObject).mem);
+  TMemBuf(resObject).mem:=nil;
+  resObject.Free;
+  resObject := nil;
 end;
 
 { TResourceHandler }
