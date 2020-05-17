@@ -20,15 +20,21 @@ function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl
 function ResHndSetFixed(res: TResHandle; isFixed: LongBool): TResError; cdecl;
 function ResHndLoadSync(ahnd: TResHandle): TResError;  cdecl;
 
-function ResSourceAddDir(const dir: PUnicodeChar): Boolean; cdecl;
-function ResExists(const arefName: PUnicodeChar): Boolean; cdecl;
+function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
+function ResExists(const arefName: PUnicodeChar): TResError; cdecl;
 
 const
-  RES_NO_ERROR   = 0;
-  RES_SUCCESS    = RES_NO_ERROR;
-  RES_INV_PARAMS = -1;
-  RES_INT_ERROR  = -100;
-  RES_NO_RESOURCE = -2;
+  RES_SCHEDULED     = 1;
+  RES_NO_ERROR      = 0;
+  RES_SUCCESS       = RES_NO_ERROR;
+  RES_INV_PARAMS    = -1;
+  RES_INT_ERROR     = -100;
+  RES_NO_RESOURCE   = -2;
+  RES_NO_FILE       = -3;
+  RES_UNK_FILE      = -4;
+  RES_FAIL_LOAD     = -5;
+  RES_NO_SOURCES    = -300;
+  RES_NO_SOURCEROOT = -301;
 
 implementation
 
@@ -127,7 +133,7 @@ begin
   hnd.Owner.AddFlags([rfFixed]);
 end;
 
-function ResSourceAddDir(const dir: PUnicodeChar): Boolean; cdecl;
+function ResSourceAddDir(const dir: PUnicodeChar): TResError; cdecl;
 var
   pth : UnicodeString;
   i   : integer;
@@ -136,11 +142,16 @@ var
   fp  : TFileResourceProvider;
   cmp : UnicodeString;
 begin
-  Result:=(dir<>nil) and (dir<>'');
-  if not Result then Exit;
+  if not ((dir<>nil) and (dir<>'')) then begin
+    Result:=RES_INV_PARAMS;
+    Exit;
+  end;
+
   pth := ExpandFileName(dir);
-  Result := DirectoryExists(pth);
-  if not Result then Exit;
+  if not DirectoryExists(pth) then begin
+    Result:=RES_NO_SOURCEROOT;
+    Exit;
+  end;
 
   cmp := GetDirForCompare(pth);
   for i:=0 to providers.Count-1 do begin
@@ -148,30 +159,42 @@ begin
     if not (p is TFileResourceProvider) then continue;
     fp := TFileResourceProvider(p);
     if fp.isSameDir(cmp) then begin
-      Result:=true;
+      Result:=RES_SUCCESS;
       Exit;
     end;
   end;
   RegisterProvider( TFileResourceProvider.Create(pth, cmp));
+  Result:=RES_SUCCESS;
 end;
 
-function ResExists(const arefName: PUnicodeChar): Boolean; cdecl;
+function ResExists(const arefName: PUnicodeChar): TResError; cdecl;
 var
   refName : string;
   p : TResourceProvider;
 begin
-  Result:=false;
-  if providers = nil then Exit;
+  if (providers = nil) or (providers.Count=0) then begin
+    Result:=RES_NO_SOURCES;
+    Exit;
+  end;
 
   refName := GetResName(arefName);
-  Result := FindResource(refName, p);
+  if not FindResource(refName, p) then
+    Result:=RES_NO_RESOURCE
+  else
+    Result:=RES_SUCCESS;
 end;
 
-function LoadErrorToResult(err: TLoadResult): TResError;
-begin
-  //todo:
-  Result:=RES_INV_PARAMS;
-end;
+const
+  LoadErrorToResError : array [TLoadResult] of  TResError = (
+   RES_SUCCESS,     // lrSuccess,
+   RES_SUCCESS,     // lrLoaded,
+   RES_SUCCESS,     // lrAlreadyLoaded,
+   RES_SCHEDULED,   // lrLoadScheduled,
+   RES_NO_RESOURCE, // lrErrNoPhysResource,
+   RES_NO_FILE,     // lrErrNoStream,
+   RES_UNK_FILE,    // lrErrUnkResource,
+   RES_FAIL_LOAD    // lrErrFailToLoad
+  );
 
 function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
 var
@@ -182,7 +205,7 @@ begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
   res := hnd.Owner.manager.LoadResourceSync(hnd);
-  Result := LoadErrorToResult(res);
+  Result := LoadErrorToResError[res];
 end;
 
 end.
