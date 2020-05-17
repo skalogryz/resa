@@ -27,6 +27,12 @@ type
     function UnloadResource(const refName: string; var resObject: TObject): Boolean; override;
   end;
 
+type
+  TExternalResource = class(TObject)
+    resRef    : Pointer;
+    resRefNum : Integer;
+  end;
+
 implementation
 
 procedure RegisterLoader(aloader: TResourceLoader);

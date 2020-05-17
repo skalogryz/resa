@@ -52,6 +52,46 @@ const
   EVENT_W_FAIL_TOLOAD   = 1000;
   EVENT_W_ABNORMAL_LOAD = 1001;
 
+
+type
+  TStreamRef = Pointer;
+
+  TLoadProc = procedure(
+    LoaderData: Pointer;
+    const refName: PChar;
+    const streamRef: Pointer;
+    var Size: Int64;
+    var Resource: Pointer;
+    var ResRefNum: Integer
+  ); cdecl;
+
+  TUnloadProc = procedure (
+    LoaderData: Pointer;
+    Resource: Pointer;
+    ResRefNum: Integer
+  ); cdecl;
+
+  TCanLoadProc = procedure (
+    LoaderData: Pointer;
+    const refName: PChar;
+    const streamRef: Pointer;
+    var CanLoad: Integer
+  ); cdecl;
+
+
+  TResourceLoaderSt = packed record
+    canLoadProc : TCanLoadProc;
+    loadProc    : TLoadProc;
+    unloadProc  : TUnloadProc;
+  end;
+
+function ResLoaderRegister(loaderData: Pointer; const procRef: TResourceLoaderSt): TResError;
+function ResLoaderUnregister(loaderData: Pointer): TResError;
+
+function StreamRead(streamRef: TStreamRef; dst: PByte; dstSize: Integer): Integer; cdecl;
+function StreamGetSize(streamRef: TStreamRef): Int64;
+function StreamSetPos(streamRef: TStreamRef; apos: Int64): LongBool;
+
 implementation
 
 type
@@ -302,6 +342,155 @@ destructor TResManHandle.Destroy;
 begin
   manager.Free;
   inherited Destroy;
+end;
+
+function StreamRead(streamRef: TStreamRef; dst: PByte; dstSize: Integer): Integer; cdecl;
+begin
+  if not Assigned(streamRef) or not Assigned(dst) then begin
+    Result:=-1;
+    Exit;
+  end;
+  try
+    Result := TStream(streamRef).Read(dst^, dstSize);
+  except
+    Result:=-1;
+  end;
+end;
+
+function StreamGetSize(streamRef: TStreamRef): Int64;
+begin
+  try
+    if not Assigned(streamRef) then Result:=-1
+    else Result:=TStream(streamRef).Size;
+  except
+    Result:=-1;
+  end;
+end;
+
+function StreamSetPos(streamRef: TStreamRef; apos: Int64): LongBool;
+begin
+  try
+    TStream(streamRef).Position:=apos;
+    Result:=true;
+  except
+    Result:=false;
+  end;
+end;
+
+type
+
+  { TExternalLoader }
+
+  TExternalLoader = class(TResourceLoader)
+    LoaderData: Pointer;
+    LoadProc: TLoadProc;
+    UnloadProc: TUnloadProc;
+    CanLoadProc: TCanLoadProc;
+    function CanLoad(const refName: string; stream: TStream): Boolean;
+      override;
+    function LoadResource(
+      const refName: string; stream: TStream;
+      out Size: QWord; out resObject: TObject
+    ): Boolean; override;
+    function UnloadResource(const refName: string; var resObject: TObject): Boolean;
+      override;
+  end;
+
+
+function ResLoaderRegister(loaderData: Pointer; const procRef: TResourceLoaderSt): TResError;
+var
+  ldr : TExternalLoader;
+begin
+  if not Assigned(procRef.canLoadProc)
+    or not Assigned(procRef.unloadProc)
+    or not Assigned(procRef.loadProc) then
+  begin
+    Result:=RES_INV_PARAMS;
+    Exit;
+  end;
+
+  ldr := TExternalLoader.Create;
+  ldr.LoaderData := loaderData;
+  ldr.LoadProc := procRef.loadProc;
+  ldr.CanLoadProc := procRef.canLoadProc;
+  ldr.UnloadProc := procRef.unloadProc;
+  RegisterLoader(ldr);
+  Result:=RES_SUCCESS;
+end;
+
+function ResLoaderUnregister(loaderData: Pointer): TResError;
+var
+  i : integer;
+  ld : TExternalLoader;
+begin
+  for i:=0 to loaders.Count-1 do
+    if (TObject(loaders[i]) is TExternalLoader) then begin
+      ld := TExternalLoader(TObject(loaders[i]));
+      if (ld.LoaderData = loaderData) then
+      begin
+        UnregisterLoader(TExternalLoader(TObject(loaders[i])));
+        Result:=RES_SUCCESS;
+        Exit;
+      end;
+    end;
+  Result:=RES_INV_PARAMS;
+end;
+
+{ TExternalLoader }
+
+function TExternalLoader.CanLoad(const refName: string; stream: TStream
+  ): Boolean;
+var
+ resI: integer;
+begin
+  if not Assigned(CanLoadProc) then begin
+    Result:=false;
+    Exit;
+  end;
+  resI:=0;
+  CanLoadProc(LoaderData, PChar(refName), TStreamRef(stream), resI);
+  Result:=resI<>0;
+end;
+
+function TExternalLoader.LoadResource(const refName: string; stream: TStream;
+  out Size: QWord; out resObject: TObject): Boolean;
+var
+  resRef : Pointer;
+  resNum : integer;
+  ext    : TExternalResource;
+begin
+  Size:=0;
+  resObject:=nil;
+  Result := Assigned(LoadProc);
+  if not Result then Exit;
+
+  resRef := nil;
+  resNum := 0;
+  LoadProc(LoaderData,
+    PChar(refName),
+    TStreamRef(Stream),
+    Size, resRef, resNum);
+  Result := resRef<>nil;
+  if not Result then Exit;
+
+  ext := TExternalResource.Create;
+  ext.resRef := resRef;
+  ext.resRefNum := resNum;
+  resObject := ext;
+end;
+
+function TExternalLoader.UnloadResource(const refName: string;
+  var resObject: TObject): Boolean;
+var
+  er : TExternalResource;
+begin
+  Result := Assigned(UnloadProc) and (resObject is TExternalResource);
+  if not Result then Exit;
+
+  er := TExternalResource(resObject);
+  UnloadProc(LoaderData, er.resRef, er.resRefNum);
+  resObject.Free;
+  Result:=true;
 end;
 
 end.
