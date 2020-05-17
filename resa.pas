@@ -20,6 +20,11 @@ type
   TResourceLoader = class;
   TResourceManager = class;
 
+  TResObjectInfo = record
+    obj    : TObject;
+    loader : TResourceLoader;
+  end;
+
   { TResourceObject }
 
   TResourceObject = class(TObject)
@@ -31,12 +36,10 @@ type
     fRefName : string;
     fManager : TResourceManager;
     procedure UnloadAll;
+    procedure UnloadInfo(var inf: TResObjectInfo);
   public
     Flags      : TResourceFlags;
-    loadedWith : TResourceLoader;
-    loadObj    : TObject;
-    reloadedWith : TResourceLoader;
-    reloadObj  : TObject;
+    resObj     : array [0..1] of TResObjectInfo;
 
     constructor Create(const ARefName: string; AManager: TResourceManager);
     destructor Destroy; override;
@@ -47,7 +50,7 @@ type
     function GetFlags: TResourceFlags;
     procedure AddFlags(fl: TResourceFlags);
     procedure RemoveFlags(fl: TResourceFlags);
-    function SwapLoads(unloadLoaded: Boolean): Boolean;
+    function SwapLoads: Boolean;
     property RefName: string read fRefName; // readonly. no need to lock
     property Manager: TResourceManager read fManager;
   end;
@@ -150,6 +153,10 @@ type
     resRef    : Pointer;
     resRefNum : Integer;
   end;
+
+const
+  IDX_LOAD   = 0;
+  IDX_RELOAD = 1;
 
 implementation
 
@@ -260,6 +267,8 @@ var
   loadingFlag : TResourceFlags;
   loadedFlag  : TResourceFlags;
   loadLog     : TResouceManagerLog;
+const
+  ReloadIdx : array [boolean] of integer = (IDX_LOAD, IDX_RELOAD);
 begin
   Result := FindLoader(p, res.RefName, st, ld);
   if Result<>lrSuccess then Exit;
@@ -291,13 +300,8 @@ begin
 
       res.Lock;
       try
-        if isReload then begin
-          res.reloadedWith := ld;
-          res.reloadObj := obj;
-        end else begin
-          res.loadedWith := ld;
-          res.loadObj := obj;
-        end;
+        res.resObj[ReloadIdx[isReload]].obj := obj;
+        res.resObj[ReloadIdx[isReload]].loader := ld;
         res.AddFlags(loadedFlag);
       finally
         res.Unlock;
@@ -426,35 +430,36 @@ begin
   end;
 end;
 
-function TResourceObject.SwapLoads(unloadLoaded: Boolean): Boolean;
+function TResourceObject.SwapLoads: Boolean;
 var
-  un  : TObject;
-  unl : TResourceLoader;
+  info : TResObjectInfo;
 begin
-  Result:=Assigned(loadObj) and Assigned(reloadObj);
-  if not Result then Exit;
-
+  Result:=false;
   Lock;
   try
-    un := loadObj;
-    unl := loadedWith;
-    loadObj := reloadObj;
-    loadedWith := reloadedWith;
-    reloadObj := nil;
-    reloadedWith := nil;
+    if not Assigned(resObj[0].obj) or not Assigned(resObj[1].obj) then Exit;
+    info := resObj[0];
+    resObj[0] := resObj[1];
+    resObj[1] := info;
+    Result := true;
   finally
     Unlock;
   end;
-  manager.UnloadResObj(refName, un, unl);
 end;
 
 procedure TResourceObject.UnloadAll;
 begin
-  if Assigned(loadObj) and Assigned(loadedWith) then
-    manager.UnloadResObj(refName, loadObj, loadedWith);
+  UnloadInfo(resObj[0]);
+  UnloadInfo(resObj[1]);
+end;
 
-  if Assigned(reloadObj) and Assigned(reloadedWith) then
-    manager.UnloadResObj(refName, reloadObj, reloadedWith);
+procedure TResourceObject.UnloadInfo(var inf: TResObjectInfo);
+begin
+  if Assigned(inf.obj) and Assigned(inf.loader) then begin
+    manager.UnloadResObj(refName, inf.obj, inf.loader);
+    inf.obj := nil;
+    inf.loader := nil;
+  end;
 end;
 
 constructor TResourceObject.Create(const ARefName: string; AManager: TResourceManager);
