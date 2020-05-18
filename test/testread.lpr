@@ -337,7 +337,7 @@ begin
   //
   //writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
   //writeln('ResHndRelease    = ', ResHndRelease(res));
-  writeln('hit enter to finish');
+  writeln('>>>>hit enter to finish<<<<');
   readln;
   writeln('----------MANAGER RELEASE----------');
   writeln('ResManRelease     = ', ResManRelease(man));
