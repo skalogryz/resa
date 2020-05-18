@@ -153,12 +153,12 @@ begin
   writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
 
-  writeln('ResHndLoadSync   = ', ResHndLoadSync(res));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res, FLAGS_SYNC));
 
   writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
 
-  writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+  writeln('ResHndUnloadSync = ', ResHndUnload(res, FLAGS_SYNC));
 
   writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
@@ -209,10 +209,10 @@ begin
   ResHndAddCallback(res, @ResCb1, EVENTRES_AFTER_LOAD or EVENTRES_BEFORE_UNLOAD, nil);
   ResHndAddCallback(res, @ResCb2, EVENTRES_BEFORE_UNLOAD, nil);
 
-  writeln('ResHndLoadSync   = ', ResHndLoadSync(res));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res, FLAGS_SYNC));
   writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
-  writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+  writeln('ResHndUnloadSync = ', ResHndUnload(res, FLAGS_SYNC));
   writeln('ResHndRelease    = ', ResHndRelease(res));
   writeln('ResManRelease    = ', ResManRelease(man));
 end;
@@ -232,10 +232,10 @@ begin
   writeln('ResManAlloc      = ', ResManAlloc(man));
   SetLog(man);
   writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u), res));
-  writeln('ResHndLoadSync   = ', ResHndLoadSync(res));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res, FLAGS_SYNC));
   writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
-  writeln('ResHndLoadSync   = ', ResHndReloadSync(res));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res, FLAGS_SYNC or FLAGS_RELOADOBJ));
   writeln('ResHndGetObj[0]  = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
   writeln('ResHndGetObj[1]  = ', ResHndGetObj(res, p, ref, 1));
@@ -245,16 +245,112 @@ begin
   writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
   writeln('  loaded obj = ', PtrUInt(p));
 
-  writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+  writeln('ResHndUnloadSync = ', ResHndUnload(res, FLAGS_SYNC));
   writeln('ResHndRelease    = ', ResHndRelease(res));
   writeln('ResManRelease    = ', ResManRelease(man));
 end;
+
+procedure TestMemLimit;
+var
+  fn  : string;
+  u   : UnicodeString;
+  fn2 : string;
+  u2  : UnicodeString;
+  man : TResManagerHandle;
+  lim : UInt64;
+  res1 : TResManagerHandle;
+  res2 : TResManagerHandle;
+begin
+  fn := ChangeFileExt(ExtractFileName(ParamStr(0)),'.lpr');
+  u := {%H-}fn;
+  fn2 := ExtractFileName(ParamStr(0));
+  u2 := {%H-}fn2;
+  RegisterDefaults;
+  writeln('ResManAlloc       = ', ResManAlloc(man));
+  SetLog(man);
+    write('ResManGetMemLimit = ', ResManGetMemLimit(man, lim));
+  writeln(' limit = ',lim);
+  writeln('ResManSetMemLimit = ', ResManSetMemLimit(man, 9000));
+    write('ResManGetMemLimit = ', ResManGetMemLimit(man, lim));
+  writeln(' limit = ',lim);
+  writeln('----------LOAD 1----------');
+  writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u), res1));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res1, FLAGS_SYNC));
+  writeln('----------LOAD 2----------');
+  writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u2), res2));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res2, FLAGS_SYNC));
+
+  //writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //writeln('ResHndLoadSync   = ', ResHndReloadSync(res));
+  //writeln('ResHndGetObj[0]  = ', ResHndGetObj(res, p, ref, 0));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //writeln('ResHndGetObj[1]  = ', ResHndGetObj(res, p, ref, 1));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //
+  //writeln('ResHndLoadSync   = ', ResHndSwap(res));
+  //writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //
+  //writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+  //writeln('ResHndRelease    = ', ResHndRelease(res));
+  writeln('----------MANAGER RELEASE----------');
+  writeln('ResManRelease     = ', ResManRelease(man));
+end;
+
+procedure TestAsync;
+var
+  fn  : string;
+  u   : UnicodeString;
+  fn2 : string;
+  u2  : UnicodeString;
+  man : TResManagerHandle;
+  lim : UInt64;
+  res1 : TResManagerHandle;
+  res2 : TResManagerHandle;
+begin
+  fn := ChangeFileExt(ExtractFileName(ParamStr(0)),'.lpr');
+  u := {%H-}fn;
+  fn2 := ExtractFileName(ParamStr(0));
+  u2 := {%H-}fn2;
+  RegisterDefaults;
+  writeln('ResManAlloc       = ', ResManAlloc(man));
+  SetLog(man);
+  writeln('----------LOAD 1----------');
+  writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u), res1));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res1, 0));
+  writeln('----------LOAD 2----------');
+  writeln('ResHndAlloc      = ', ResHndAlloc(man, PUnicodeChar(u2), res2));
+  writeln('ResHndLoadSync   = ', ResHndLoad(res2, 0));
+
+  //writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //writeln('ResHndLoadSync   = ', ResHndReloadSync(res));
+  //writeln('ResHndGetObj[0]  = ', ResHndGetObj(res, p, ref, 0));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //writeln('ResHndGetObj[1]  = ', ResHndGetObj(res, p, ref, 1));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //
+  //writeln('ResHndLoadSync   = ', ResHndSwap(res));
+  //writeln('ResHndGetObj     = ', ResHndGetObj(res, p, ref, 0));
+  //writeln('  loaded obj = ', PtrUInt(p));
+  //
+  //writeln('ResHndUnloadSync = ', ResHndUnloadSync(res, 0));
+  //writeln('ResHndRelease    = ', ResHndRelease(res));
+  writeln('hit enter to finish');
+  readln;
+  writeln('----------MANAGER RELEASE----------');
+  writeln('ResManRelease     = ', ResManRelease(man));
+end;
+
 
 begin
   //TestAllocation;
   //TestProvider;
   //TestLoad(true);
   //TestLoadCallback(true);
-  TestSwap;
+  //TestSwap;
+  //TestMemLimit;
+  TestAsync;
 end.
 
