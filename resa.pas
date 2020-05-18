@@ -112,6 +112,32 @@ type
     srNotReloaded
   );
 
+  { TQueueTask }
+
+  TQueueTask = class(TObject)
+    res    : TResourceObject;
+    isLoad : Boolean;
+    idx    : Integer;
+    constructor Create(res: TResourceObject; isLoad : Boolean; idx: Integer);
+  end;
+
+  { TQueueOfTasks }
+
+  TQueueOfTasks = class(TObject)
+  private
+    fItems : TList;
+    flock  : TRTLCriticalSection;
+    procedure Lock;
+    procedure Unlock;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Add(res: TResourceObject; toLoad: boolean; idx: integer);
+    procedure AddPriotity(res: TResourceObject; toLoad: boolean; idx: integer);
+    function Pop(out res: TResourceObject; out toLoad: boolean; out idx: integer): Boolean;
+    procedure Clear;
+  end;
+
   { TResourceManager }
 
   TResourceManager = class(TObject)
@@ -119,6 +145,7 @@ type
     resList     : THashedStringListEx;
     flock       : TRTLCriticalSection;
     memVerified : Boolean;
+    queue       : TQueueOfTasks;
     function GetResource(const refName: string; forced: Boolean): TResourceObject;
 
     function FindLoader(p: TResourceProvider; const refName: string; out st: TStream;
@@ -145,8 +172,8 @@ type
     function RegisterResource(const refName: string): TResourceObject;
     function ResourceExists(const refName: string): TResourceObject;
 
-    function LoadResourceSync(res: TResourceObject; Reload: Boolean): TLoadResult;
-    function UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
+    function LoadRes(res: TResourceObject; isReloadObj: Boolean; Sync: Boolean): TLoadResult;
+    function UnloadRes(res: TResourceObject; isReloadObj: Boolean; Sync: Boolean): Boolean;
 
     function SwapResObj(res: TResourceObject): TSwapResult;
 
@@ -194,9 +221,111 @@ implementation
 uses
   resa_providers, resa_loaders;
 
+const
+  ReloadIdx : array [boolean] of integer = (IDX_LOAD, IDX_RELOAD);
+
 function CheckNeedsLoad(flags: TResourceFlags): Boolean;
 begin
   Result := (flags *[rfLoading, rfLoaded, rfReloading, rfReloaded]) = [];
+end;
+
+{ TQueueTask }
+
+constructor TQueueTask.Create(res: TResourceObject; isLoad: Boolean;
+  idx: Integer);
+begin
+  Self.res := res;
+  Self.isLoad := isLoad;
+  self.idx := idx;
+end;
+
+{ TQueueOfTasks }
+
+procedure TQueueOfTasks.Lock;
+begin
+  EnterCriticalsection(flock);
+end;
+
+procedure TQueueOfTasks.Unlock;
+begin
+  LeaveCriticalsection(flock);
+end;
+
+constructor TQueueOfTasks.Create;
+begin
+  inherited Create;
+  fItems := TList.Create;
+  InitCriticalSection(flock);
+end;
+
+destructor TQueueOfTasks.Destroy;
+begin
+  Clear;
+  fItems.Free;
+  DoneCriticalsection(flock);
+  inherited Destroy;
+end;
+
+procedure TQueueOfTasks.Add(res: TResourceObject; toLoad: boolean; idx: integer);
+begin
+  Lock;
+  try
+    fItems.add(TQueueTask.Create(res, toLoad, idx));
+  finally
+    Unlock;
+  end;
+end;
+
+procedure TQueueOfTasks.AddPriotity(res: TResourceObject; toLoad: boolean;
+  idx: integer);
+begin
+  Lock;
+  try
+    if fitems.Count=0 then
+      fItems.Add(TQueueTask.Create(res, toLoad, idx))
+    else
+      fItems.Insert(0, TQueueTask.Create(res, toLoad, idx));
+  finally
+    Unlock;
+  end;
+end;
+
+function TQueueOfTasks.Pop(out res: TResourceObject; out toLoad: boolean; out idx: integer): Boolean;
+var
+  t : TQueueTask;
+begin
+  Lock;
+  try
+    res := nil;
+    toLoad :=false;
+    idx := 0;
+    Result:=fItems.Count>0;
+    if not Result then Exit;
+
+    t := TQueueTask(fItems[0]);
+    res := t.res;
+    idx := t.idx;
+    toLoad := t.isLoad;
+    t.Free;
+
+    fItems.Delete(0);
+  finally
+    Unlock;
+  end;
+end;
+
+procedure TQueueOfTasks.Clear;
+var
+  i : integer;
+begin
+  Lock;
+  try
+    for i:=0 to fItems.Count-1 do
+      TObject(fItems[i]).free;
+    fItems.Clear;
+  finally
+    Unlock;
+  end;
 end;
 
 { TResourceLoader }
@@ -305,8 +434,6 @@ var
   loadedFlag  : TResourceFlags;
   cancelFlag  : TResourceFlags;
   loadLog     : TResouceManagerLog;
-const
-  ReloadIdx : array [boolean] of integer = (IDX_LOAD, IDX_RELOAD);
 begin
   Result := FindLoader(p, res.RefName, st, ld);
   if Result<>lrSuccess then Exit;
@@ -475,6 +602,7 @@ begin
   maxMem:=0; // limitless
   maxThread:=4;
   memVerified:=true;
+  queue:=TQueueOfTasks.Create;
 end;
 
 destructor TResourceManager.Destroy;
@@ -485,6 +613,7 @@ begin
     TObject(resList.Objects[i]).Free;
   resList.Free;
   DoneCriticalsection(flock);
+  queue.Free;
   inherited Destroy;
 end;
 
@@ -508,23 +637,22 @@ begin
   end;
 end;
 
-
-function TResourceManager.LoadResourceSync(res: TResourceObject; Reload: Boolean): TLoadResult;
+function TResourceManager.LoadRes(res: TResourceObject; isReloadObj: Boolean;
+  Sync: Boolean): TLoadResult;
 var
   p : TResourceProvider;
-  isReload: Boolean;
 begin
   res.Lock;
   try
-    if Reload then begin
+    if isReloadObj then begin
       if res.Flags * [rfLoaded, rfLoading] = [] then
-        Reload := false; // the file has not been loaded yet
+        isReloadObj := false; // the file has not been loaded yet
     end;
 
-    if not Reload and (res.Flags * [rfLoaded, rfLoading] <> []) then begin
+    if not isReloadObj and (res.Flags * [rfLoaded, rfLoading] <> []) then begin
       Result:=lrAlreadyLoaded;
       Exit;
-    end else if Reload and (res.Flags * [rfReloading] <> []) then begin
+    end else if isReloadObj and (res.Flags * [rfReloading] <> []) then begin
       // it's ok to reload already loaded object
       Result:=lrAlreadyLoaded; // don't interrupt reloading
       Exit;
@@ -533,21 +661,28 @@ begin
     res.Unlock;
   end;
 
-  FindProvider(res.RefName, p);
-  if p = nil then begin
-    Result:=lrErrNoPhysResource;
-    Exit;
-  end;
+  if Sync then begin
+    FindProvider(res.RefName, p);
+    if p = nil then begin
+      Result:=lrErrNoPhysResource;
+      Exit;
+    end;
 
-  Result := PerformLoad(p, res, Reload);
-  VerifyMem(res, true);
+    Result := PerformLoad(p, res, isReloadObj);
+    VerifyMem(res, true);
+  end else
+    queue.Add(res, true, ReloadIdx[isReloadObj]);
 end;
 
-function TResourceManager.UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
+
+function TResourceManager.UnloadRes(res: TResourceObject; isReloadObj: Boolean;
+  Sync: Boolean): Boolean;
 var
   idx : integer;
   cnFlag : TResourceFlags;
   clrFlag : TResourceFlags;
+  progFlag : TResourceFlags;
+  flag : TResourceFlags;
 begin
   if not Assigned(res) then begin
     Result:=false;
@@ -556,26 +691,42 @@ begin
 
   res.Lock;
   try
+    flag := res.Flags;
+    idx := ReloadIdx[isReloadObj];
     if isReloadObj then begin
-      idx := IDX_RELOAD;
       cnFlag := [rfReloadingCancel];
       clrFlag := [rfReloaded];
+      progFlag := [rfReloading];
     end else begin
       idx := IDX_LOAD;
       cnFlag := [rfLoadingCancel];
       clrFlag := [rfLoaded];
+      progFlag := [rfReloading];
     end;
 
-    if not Assigned(res.resObj[idx].obj) then begin
+
+    // the resource is being loaded. Marking it as to be cancelled!
+    if (flag * progFlag <> []) then begin
       res.Flags := res.Flags + cnFlag;
       Result := true;
-    end else if Assigned(res.ResObj[idx].obj) and Assigned(res.ResObj[idx].loader) then begin
-      UnloadResObj(res.RefName, res.ResObj[idx].obj, res.ResObj[idx].loader, res.ResObj[idx].size, isReloadObj);
-      res.ClearLoad(idx);
-      res.Flags := res.Flags - clrFlag;
+    end;
+
+    // it's already unloaded nothing to worry about
+    if (flag * clrFlag = []) then begin
+      Result := true;
+      Exit;
+    end;
+
+    if Sync then begin
+      if Assigned(res.ResObj[idx].obj) and Assigned(res.ResObj[idx].loader) then begin
+        UnloadResObj(res.RefName, res.ResObj[idx].obj, res.ResObj[idx].loader, res.ResObj[idx].size, isReloadObj);
+        res.ClearLoad(idx);
+        res.Flags := res.Flags - clrFlag;
+      end;
       Result := true;
     end else
-      Result := false;
+      queue.Add(res, false, idx);
+
   finally
     res.Unlock;
   end;

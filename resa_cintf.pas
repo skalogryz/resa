@@ -5,6 +5,9 @@ unit resa_cintf;
 interface
 
 uses
+  {$IFDEF UNIX}
+  cthreads,
+  {$ENDIF}
   resa, resa_filesys, resa_providers, classes, sysutils, resa_loaders;
 
 type
@@ -414,7 +417,7 @@ var
 begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
-  res := hnd.Owner.manager.LoadResourceSync(hnd.Owner, false);
+  res := hnd.Owner.manager.LoadRes(hnd.Owner, false, true);
   Result := LoadErrorToResError[res];
 end;
 
@@ -426,7 +429,7 @@ var
 begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
-  res := hnd.Owner.manager.LoadResourceSync(hnd.Owner, true);
+  res := hnd.Owner.manager.LoadRes(hnd.Owner, true, true);
   Result := LoadErrorToResError[res];
 end;
 
@@ -477,7 +480,7 @@ begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
 
-  if hnd.Owner.manager.UnloadResourceSync(hnd.Owner, false) then
+  if hnd.Owner.manager.UnloadRes(hnd.Owner, false, true) then
     Result := RES_SUCCESS
   else
     Result := RES_NOT_LOADED;
