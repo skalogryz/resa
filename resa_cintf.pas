@@ -79,6 +79,8 @@ const
   EVENT_LOAD_CANCEL     = 14;
   EVENT_UNLOAD_START    = 15;
   EVENT_SWAPPED         = 16;
+  EVENT_MEM_CLEANUP     = 17;
+  EVENT_RES_MEM_CLEANUP = 18;
   EVENT_W_FAIL_TOLOAD   = 1000;
   EVENT_W_ABNORMAL_LOAD = 1001;
 
@@ -492,6 +494,8 @@ const
     EVENT_UNLOADED_RES,    // noteUnloadedResObj
     EVENT_LOAD_CANCEL,     // noteLoadCancel
     EVENT_SWAPPED,         // noteSwapped
+    EVENT_MEM_CLEANUP,
+    EVENT_RES_MEM_CLEANUP,
     EVENT_W_FAIL_TOLOAD,   // wantFailToLoad,
     EVENT_W_ABNORMAL_LOAD  // warnAbnormalLoad, // function returned true, but no object was provided
   );
@@ -506,12 +510,15 @@ var
   obj : TObject;
   i   : integer;
   clb : TResCallback;
+  p : PChar;
 begin
+  if refName = '' then p := nil
+  else p := PChar(refName);
   if Assigned(logCallback) then begin
     logCallback(
       TResManagerHandle(Self),
       ResouceManagerLogToEvent[logMsg],
-      PChar(refName),
+      p,
       param1, param2,
       logUserData
     );
@@ -533,7 +540,7 @@ begin
       clb.proc(
         TResManagerHandle(Self),
         ResouceManagerLogToEvent[logMsg],
-        PChar(refName),
+        p,
         param1, param2, clb.userData
       );
   end;

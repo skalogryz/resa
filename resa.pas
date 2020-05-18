@@ -99,6 +99,8 @@ type
     noteUnloadedResObj,
     noteLoadCancel,
     noteSwapped,
+    noteMemCleanup,
+    noteMemResourceCleanup,
     wantFailToLoad,
     warnAbnormalLoad  // function returned true, but no object was provided
   );
@@ -114,23 +116,29 @@ type
 
   TResourceManager = class(TObject)
   private
-    resList : THashedStringListEx;
-    flock     : TRTLCriticalSection;
+    resList     : THashedStringListEx;
+    flock       : TRTLCriticalSection;
+    memVerified : Boolean;
     function GetResource(const refName: string; forced: Boolean): TResourceObject;
 
     function FindLoader(p: TResourceProvider; const refName: string; out st: TStream;
        out ld: TResourceLoader): TLoadResult;
 
+    procedure RunMemTest(loadedRes: TResourceObject; newSize: int64);
     function PerformLoad(p: TResourceProvider; res: TResourceObject; isReload: Boolean): TLoadResult;
 
     procedure Log(const logMsg: TResouceManagerLog; const refName: string; param1: Int64 = 0; param2: Int64 = 0);
-    procedure UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader; isReloadObj: Boolean);
+    procedure UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader; Sz: int64; isReloadObj: Boolean);
+
+    procedure AddMem(const Amount: Int64);
+    procedure VerifyMem(skipRes: TResourceObject; unloadSync: Boolean);
   public
     LogProc   : procedure (Sender: TResourceManager;
                   const logMsg: TResouceManagerLog;
                   const refName: string;
                   param1: Int64 = 0; param2: Int64 = 0) of object;
     maxMem    : QWord;
+    memUse    : QWord;
     maxThread : LongWord;
     constructor Create;
     destructor Destroy; override;
@@ -279,6 +287,11 @@ begin
   Result := lrSuccess;
 end;
 
+procedure TResourceManager.RunMemTest(loadedRes: TResourceObject; newSize: int64);
+begin
+  inc(memUse, newSize);
+end;
+
 function TResourceManager.PerformLoad(p: TResourceProvider;
   res: TResourceObject; isReload: Boolean): TLoadResult;
 var
@@ -342,6 +355,7 @@ begin
           res.Unlock;
         end;
         Log(noteLoadSuccess, res.RefName, idx);
+        AddMem(sz);
         Result := lrLoaded;
       end;
     finally
@@ -363,14 +377,93 @@ begin
   end;
 end;
 
-procedure TResourceManager.UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader; isReloadObj: Boolean);
+procedure TResourceManager.UnloadResObj(const refName: string; obj: TObject; loadedWith: TResourceLoader; Sz: int64; isReloadObj: Boolean);
 var
   paramUnload : array [Boolean] of Int64 = (IDX_LOAD, IDX_RELOAD);
 begin
   if ASsigned(loadedWith) and Assigned(obj) then begin
     Log(noteUnloadingResObj, refName, paramUnload[isReloadObj]);
     loadedWith.UnloadResource(refName, obj);
+    AddMem(Sz);
     Log(noteUnloadedResObj, refName, paramUnload[isReloadObj]);
+  end;
+end;
+
+procedure TResourceManager.AddMem(const Amount: Int64);
+begin
+  Lock;
+  try
+    memUse := memUse + Amount;
+    memVerified := false;
+  finally
+    Unlock;
+  end;
+end;
+
+procedure TResourceManager.VerifyMem(skipRes: TResourceObject; unloadSync: Boolean);
+var
+  doVerify  : Boolean;
+  victim    : TList;
+  cleanMem  : QWord;
+  victimMem : QWord;
+  obj       : TObject;
+  ro        : TResourceObject;
+  i         : Integer;
+begin
+  cleanMem :=0;
+  lock;
+  try
+    doVerify := not memVerified and (maxMem >0);
+    if doVerify and (memUse > maxMem) then
+      cleanMem := memUse - maxMem;
+
+    if (not doVerify) or (cleanMem = 0) then
+      memVerified := true;
+    if (cleanMem = 0) or not (doVerify) then Exit;
+
+    log(noteMemCleanup, '', memUse, maxMem);
+    victim := TList.Create;
+    victimMem := 0;
+    for i:=0 to resList.Count-1 do begin
+      obj := resList.Objects[i];
+      if not Assigned(obj) then Continue;
+      if not (obj is TResourceObject) then Continue;
+
+      ro := TResourceObject(obj);
+      if rfFixed in ro.Flags then Continue; // skipping
+      if ro = skipRes then Continue;
+
+      ro.Lock;
+      try
+        if Assigned(ro.resObj[0].obj) or Assigned(ro.resObj[1].obj) then begin
+          if Assigned(ro.resObj[0].obj) then inc(victimMem, ro.resObj[0].size);
+          if Assigned(ro.resObj[1].obj) then inc(victimMem, ro.resObj[1].size);
+          Log(noteMemResourceCleanup, ro.RefName);
+          victim.Add(obj);
+        end;
+      finally
+        ro.Unlock;
+      end;
+      if victimMem > cleanMem then break; // found enough blood!
+    end;
+
+    if unloadSync then begin
+      // sadly enough unloading Sync
+      for i:=0 to victim.Count-1 do begin
+        ro := TResourceObject(victim[i]);
+        ro.Lock;
+        try
+          ro.UnloadAll;
+        finally
+          ro.Unlock;
+        end;
+      end;
+    end;
+    victim.Free;
+    memVerified := true;
+
+  finally
+    unlock;
   end;
 end;
 
@@ -381,6 +474,7 @@ begin
   resList:=THashedStringListEx.Create;
   maxMem:=0; // limitless
   maxThread:=4;
+  memVerified:=true;
 end;
 
 destructor TResourceManager.Destroy;
@@ -446,6 +540,7 @@ begin
   end;
 
   Result := PerformLoad(p, res, Reload);
+  VerifyMem(res, true);
 end;
 
 function TResourceManager.UnloadResourceSync(res: TResourceObject; isReloadObj: Boolean): Boolean;
@@ -475,7 +570,7 @@ begin
       res.Flags := res.Flags + cnFlag;
       Result := true;
     end else if Assigned(res.ResObj[idx].obj) and Assigned(res.ResObj[idx].loader) then begin
-      UnloadResObj(res.RefName, res.ResObj[idx].obj, res.ResObj[idx].loader, isReloadObj);
+      UnloadResObj(res.RefName, res.ResObj[idx].obj, res.ResObj[idx].loader, res.ResObj[idx].size, isReloadObj);
       res.ClearLoad(idx);
       res.Flags := res.Flags - clrFlag;
       Result := true;
@@ -580,7 +675,7 @@ end;
 procedure TResourceObject.UnloadInfo(var inf: TResObjectInfo; isReloadObj: Boolean);
 begin
   if Assigned(inf.obj) and Assigned(inf.loader) then begin
-    manager.UnloadResObj(refName, inf.obj, inf.loader, isReloadObj);
+    manager.UnloadResObj(refName, inf.obj, inf.loader, inf.size, isReloadObj);
     inf.obj := nil;
     inf.loader := nil;
   end;
