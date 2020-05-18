@@ -175,6 +175,7 @@ type
 
     procedure WakeAsync;
     procedure AsyncProc(out AnyJobDone: boolean);
+    procedure AwaitThreads;
   public
     LogProc   : procedure (Sender: TResourceManager;
                   const logMsg: TResouceManagerLog;
@@ -663,7 +664,7 @@ begin
     if Assigned(tr) then begin
       if tr.inProc then Continue;
       if not tr.inLoop then begin
-        tr.WaitFor;
+        tr.WaitFor; // risky?
         tr.Free;
         tr:=nil;
         threads[i]:=nil;
@@ -672,6 +673,7 @@ begin
 
     if not Assigned(tr) then begin
       tr:=TResourceManThread.Create(true);
+      tr.manager:=Self;
       threads[i]:=tr;
       tr.Start;
       dec(needed);
@@ -689,10 +691,31 @@ var
 begin
   AnyJobDone:=queue.Pop(res, toLoad, idx);
   if not AnyJobDone then Exit;
+
   if toLoad then
     LoadRes(res, idx>0, true)
   else
     UnloadRes(res, idx>0, true);
+end;
+
+procedure TResourceManager.AwaitThreads;
+var
+  i : integer;
+begin
+  lock;
+  try
+    for i:=0 to length(threads)-1 do begin
+      if not Assigned(threads[i]) then Continue;
+      if threads[i].inLoop then
+        threads[i].ShouldStop := true;
+
+      threads[i].WaitFor;
+      threads[i].Free;
+      threads[i]:=nil;
+    end;
+  finally
+    unlock;
+  end;
 end;
 
 constructor TResourceManager.Create;
@@ -710,6 +733,8 @@ destructor TResourceManager.Destroy;
 var
   i : integer;
 begin
+  AwaitThreads;
+
   for i:=0 to resList.Count-1 do
     TObject(resList.Objects[i]).Free;
   resList.Free;
