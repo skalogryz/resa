@@ -40,10 +40,14 @@ function ResHndAlloc(man: TResManagerHandle; const arefName: PUnicodeChar; var r
 function ResHndRelease(var res: TResHandle): TResError; cdecl;
 function ResHndGetFixed(res: TResHandle; var isFixed:LongBool): TResError; cdecl;
 function ResHndSetFixed(res: TResHandle; isFixed: LongBool): TResError; cdecl;
-function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
-function ResHndReloadSync(ahnd: TResHandle): TResError; cdecl;
+const
+  FLAGS_SYNC      = $01;
+  FLAGS_RELOADOBJ = $02;
+
+function ResHndLoad(ahnd: TResHandle; flags: LongWord): TResError; cdecl;
+function ResHndUnload(ahnd: TResHandle; flags: LongWord): TResError; cdecl;
+
 function ResHndGetObj(res: TResHandle; var resource: Pointer; var resRefNumber: Integer; wantReloadedObj: Integer): TResError; cdecl;
-function ResHndUnloadSync(ahnd: TResHandle; unloadReloadObj: Integer): TResError; cdecl;
 function ResHndSwap(res: TResHandle): TResError; cdecl;
 
 const
@@ -409,7 +413,7 @@ const
    RES_FAIL_LOAD    // lrErrFailToLoad
   );
 
-function ResHndLoadSync(ahnd: TResHandle): TResError; cdecl;
+function ResHndLoad(ahnd: TResHandle; flags: LongWord): TResError; cdecl;
 var
   hnd : TResourceHandler;
   p   : TResourceProvider;
@@ -417,7 +421,7 @@ var
 begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
-  res := hnd.Owner.manager.LoadRes(hnd.Owner, false, true);
+  res := hnd.Owner.manager.LoadRes(hnd.Owner, (flags and FLAGS_RELOADOBJ>0), (flags and FLAGS_SYNC>0));
   Result := LoadErrorToResError[res];
 end;
 
@@ -473,14 +477,14 @@ begin
   end;
 end;
 
-function ResHndUnloadSync(ahnd: TResHandle; unloadReloadObj: Integer): TResError; cdecl;
+function ResHndUnload(ahnd: TResHandle; flags: LongWord): TResError; cdecl;
 var
   hnd : TResourceHandler;
 begin
   if not ResHndSanityCheck(ahnd, Result) then Exit;
   hnd := TResourceHandler(ahnd);
 
-  if hnd.Owner.manager.UnloadRes(hnd.Owner, false, true) then
+  if hnd.Owner.manager.UnloadRes(hnd.Owner, (flags and FLAGS_RELOADOBJ > 0), (flags and FLAGS_SYNC > 0)) then
     Result := RES_SUCCESS
   else
     Result := RES_NOT_LOADED;

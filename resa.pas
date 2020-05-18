@@ -135,7 +135,19 @@ type
     procedure Add(res: TResourceObject; toLoad: boolean; idx: integer);
     procedure AddPriotity(res: TResourceObject; toLoad: boolean; idx: integer);
     function Pop(out res: TResourceObject; out toLoad: boolean; out idx: integer): Boolean;
+    function Count: Integer;
     procedure Clear;
+  end;
+
+  { TResourceManThread }
+
+  TResourceManThread = class(TThread)
+  protected
+    manager    : TResourceManager;
+    ShouldStop : Boolean;
+    inProc     : Boolean;
+    inLoop     : Boolean;
+    procedure Execute; override;
   end;
 
   { TResourceManager }
@@ -146,6 +158,7 @@ type
     flock       : TRTLCriticalSection;
     memVerified : Boolean;
     queue       : TQueueOfTasks;
+    threads     : array of TResourceManThread;
     function GetResource(const refName: string; forced: Boolean): TResourceObject;
 
     function FindLoader(p: TResourceProvider; const refName: string; out st: TStream;
@@ -159,6 +172,9 @@ type
 
     procedure AddMem(const Amount: Int64);
     procedure VerifyMem(skipRes: TResourceObject; unloadSync: Boolean);
+
+    procedure WakeAsync;
+    procedure AsyncProc(out AnyJobDone: boolean);
   public
     LogProc   : procedure (Sender: TResourceManager;
                   const logMsg: TResouceManagerLog;
@@ -227,6 +243,26 @@ const
 function CheckNeedsLoad(flags: TResourceFlags): Boolean;
 begin
   Result := (flags *[rfLoading, rfLoaded, rfReloading, rfReloaded]) = [];
+end;
+
+{ TResourceManThread }
+
+procedure TResourceManThread.Execute;
+var
+  anyDone: boolean;
+begin
+  inLoop := true;
+  try
+    while (true) do begin
+      inProc:=true;
+      manager.AsyncProc(anyDone);
+      inProc:=false;
+      if not anyDone then Break;
+      if ShouldStop then Break;
+    end;
+  except
+  end;
+  inLoop := false;
 end;
 
 { TQueueTask }
@@ -309,6 +345,16 @@ begin
     t.Free;
 
     fItems.Delete(0);
+  finally
+    Unlock;
+  end;
+end;
+
+function TQueueOfTasks.Count: Integer;
+begin
+  Lock;
+  try
+    Result:=fItems.Count;
   finally
     Unlock;
   end;
@@ -574,24 +620,79 @@ begin
       if victimMem > cleanMem then break; // found enough blood!
     end;
 
-    if unloadSync then begin
-      // sadly enough unloading Sync
-      for i:=0 to victim.Count-1 do begin
-        ro := TResourceObject(victim[i]);
-        ro.Lock;
-        try
-          ro.UnloadAll;
-        finally
-          ro.Unlock;
+    for i:=0 to victim.Count-1 do begin
+      ro := TResourceObject(victim[i]);
+      ro.Lock;
+      try
+        if unloadSync then
+          ro.UnloadAll
+        else begin
+          if Assigned(ro.resObj[0].obj) then
+            queue.AddPriotity(ro, false, 0);
+          if Assigned(ro.resObj[1].obj) then
+            queue.AddPriotity(ro, false, 1);
         end;
+      finally
+        ro.Unlock;
       end;
     end;
+
+    if (not unloadSync) and (victim.Count>0) then
+      WakeAsync;
+
     victim.Free;
     memVerified := true;
 
   finally
     unlock;
   end;
+end;
+
+procedure TResourceManager.WakeAsync;
+var
+  i      : integer;
+  tr     : TResourceManThread;
+  needed : Integer;
+begin
+  if (length(threads)=0) then
+    SetLength(threads, maxThread);
+
+  needed := queue.Count;
+  for i:=0 to length(threads)-1 do begin
+    tr := threads[i];
+    if Assigned(tr) then begin
+      if tr.inProc then Continue;
+      if not tr.inLoop then begin
+        tr.WaitFor;
+        tr.Free;
+        tr:=nil;
+        threads[i]:=nil;
+      end;
+    end;
+
+    if not Assigned(tr) then begin
+      tr:=TResourceManThread.Create(true);
+      threads[i]:=tr;
+      tr.Start;
+      dec(needed);
+    end;
+    if (needed = 0) then
+      break; // should have enough threads by now
+  end;
+end;
+
+procedure TResourceManager.AsyncProc(out AnyJobDone: boolean);
+var
+  res    : TResourceObject;
+  toLoad : boolean;
+  idx    : integer;
+begin
+  AnyJobDone:=queue.Pop(res, toLoad, idx);
+  if not AnyJobDone then Exit;
+  if toLoad then
+    LoadRes(res, idx>0, true)
+  else
+    UnloadRes(res, idx>0, true);
 end;
 
 constructor TResourceManager.Create;
@@ -670,8 +771,10 @@ begin
 
     Result := PerformLoad(p, res, isReloadObj);
     VerifyMem(res, true);
-  end else
+  end else begin
     queue.Add(res, true, ReloadIdx[isReloadObj]);
+    WakeAsync;
+  end;
 end;
 
 
@@ -724,8 +827,10 @@ begin
         res.Flags := res.Flags - clrFlag;
       end;
       Result := true;
-    end else
+    end else begin
       queue.Add(res, false, idx);
+      WakeAsync;
+    end;
 
   finally
     res.Unlock;
